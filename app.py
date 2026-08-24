@@ -91,13 +91,24 @@ def init_db():
     # Insert default settings if empty
     cur = conn.execute("SELECT COUNT(*) FROM settings")
     if cur.fetchone()[0] == 0:
-        conn.execute("INSERT INTO settings (key, value) VALUES (?, ?)", ("org_name", "Your Organization Name"))
+        conn.execute("INSERT INTO settings (key, value) VALUES (?, ?)", ("org_name", "Knowsoft FMSS CloudAir Services"))
         conn.execute("INSERT INTO settings (key, value) VALUES (?, ?)", ("logo_filename", ""))
 
     conn.commit()
     conn.close()
 
+def ensure_columns():
+    """Make sure system_score column exists even on old databases"""
+    conn = get_db()
+    try:
+        conn.execute("ALTER TABLE quotations ADD COLUMN system_score REAL DEFAULT 0")
+        conn.commit()
+    except Exception:
+        pass  # Column already exists
+    conn.close()
+
 init_db()
+ensure_columns()
 
 # ---------------------------------------------------------
 # HELPERS
@@ -153,7 +164,7 @@ def calculate_system_scores():
     return df
 
 def get_final_rankings():
-    """Combine system score + average committee score"""
+    """Combine system score + average committee score - SAFE VERSION"""
     conn = get_db()
     quotations = conn.execute("SELECT * FROM quotations").fetchall()
     if not quotations:
@@ -162,6 +173,8 @@ def get_final_rankings():
 
     result = []
     for q in quotations:
+        q = dict(q)  # Convert Row to normal dict
+
         scores = conn.execute(
             "SELECT score FROM committee_scores WHERE quotation_id = ?", (q["id"],)
         ).fetchall()
@@ -170,11 +183,15 @@ def get_final_rankings():
         if scores:
             committee_avg = sum(s["score"] for s in scores) / len(scores)
 
-        # Final score = 40% system + 60% committee average
-        final_score = (q["system_score"] * 0.4) + (committee_avg * 0.6)
+        system_score = q.get("system_score")
+        if system_score is None:
+            system_score = 0
+
+        final_score = (float(system_score) * 0.4) + (committee_avg * 0.6)
 
         result.append({
-            **dict(q),
+            **q,
+            "system_score": float(system_score),
             "committee_avg": round(committee_avg, 2),
             "final_score": round(final_score, 2),
             "num_scores": len(scores)
@@ -189,7 +206,7 @@ def get_final_rankings():
 # ---------------------------------------------------------
 @app.route("/")
 def index():
-    org_name = get_setting("org_name", "eProcurement System")
+    org_name = get_setting("org_name", "Knowsoft FMSS CloudAir Services")
     logo = get_setting("logo_filename")
     return render_template("index.html", org_name=org_name, logo=logo)
 
@@ -287,8 +304,8 @@ def admin_dashboard():
     logo = get_setting("logo_filename")
 
     # Chart data
-    chart_labels = [r["name"][:20] for r in rankings[:8]]
-    chart_scores = [r["final_score"] for r in rankings[:8]]
+    chart_labels = [r["name"][:20] for r in rankings[:8]] if rankings else []
+    chart_scores = [r["final_score"] for r in rankings[:8]] if rankings else []
 
     return render_template("admin.html",
                            quotations=rankings,
@@ -484,7 +501,7 @@ def generate_report():
         f"<b>Amount:</b> ₦{winner['amount']:,.2f}<br/>"
         f"<b>Final Score:</b> {winner['final_score']} / 100<br/>"
         f"<b>Committee Average:</b> {winner['committee_avg']}<br/>"
-        f"<b>Description:</b> {winner['description'] or 'N/A'}",
+        f"<b>Description:</b> {winner.get('description') or 'N/A'}",
         styles["Normal"]
     ))
     story.append(Spacer(1, 15))
@@ -568,7 +585,7 @@ def generate_lpo():
     story.append(Paragraph("<b>1. SUPPLIER INFORMATION</b>", styles["Heading2"]))
     story.append(Paragraph(f"<b>Vendor Name:</b> {winner['name']}", styles["Normal"]))
     story.append(Paragraph(f"<b>Vendor Number:</b> {winner['vendor_number']}", styles["Normal"]))
-    story.append(Paragraph(f"<b>Description:</b> {winner['description'] or 'N/A'}", styles["Normal"]))
+    story.append(Paragraph(f"<b>Description:</b> {winner.get('description') or 'N/A'}", styles["Normal"]))
     story.append(Paragraph(f"<b>Total Contract Value:</b> ₦{winner['amount']:,.2f}", styles["Normal"]))
     story.append(Spacer(1, 15))
 
