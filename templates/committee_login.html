@@ -1,13 +1,17 @@
 {% extends "base.html" %}
-{% block title %}Admin Login{% endblock %}
+{% block title %}Committee Login{% endblock %}
 
 {% block content %}
 <div class="row justify-content-center mt-5">
     <div class="col-md-5">
         <div class="card">
             <div class="card-body p-4">
-                <h4 class="mb-4 text-center"><i class="bi bi-shield-lock"></i> Admin Login</h4>
+                <h4 class="mb-4 text-center"><i class="bi bi-people"></i> Committee Login</h4>
                 <form method="POST">
+                    <div class="mb-3">
+                        <label class="form-label">Your Full Name</label>
+                        <input type="text" name="name" class="form-control form-control-lg" required>
+                    </div>
                     <div class="mb-3">
                         <label class="form-label">Password</label>
                         <input type="password" name="password" class="form-control form-control-lg" required>

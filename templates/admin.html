@@ -1,64 +1,130 @@
 {% extends "base.html" %}
+{% block title %}Admin Dashboard{% endblock %}
+
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <h2>Procurement Dashboard</h2>
-    <a href="/admin/logout" class="btn btn-outline-danger btn-sm">Logout</a>
+<div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+    <h3 class="mb-0 fw-bold" style="color:#1a365d;">Procurement Dashboard</h3>
+    <div class="d-flex gap-2 flex-wrap">
+        <a href="{{ url_for('admin_settings') }}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-gear"></i> Settings
+        </a>
+        <a href="{{ url_for('admin_committee') }}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-people"></i> Committee
+        </a>
+        <a href="{{ url_for('generate_report') }}" class="btn btn-warning btn-sm">
+            <i class="bi bi-file-earmark-pdf"></i> Committee Report
+        </a>
+        <a href="{{ url_for('generate_lpo') }}" class="btn btn-success btn-sm">
+            <i class="bi bi-receipt"></i> Generate LPO
+        </a>
+        <a href="{{ url_for('admin_logout') }}" class="btn btn-outline-danger btn-sm">Logout</a>
+    </div>
 </div>
 
 {% if winner %}
-<div class="alert alert-warning">
-    <h5 class="mb-1">Recommended Vendor</h5>
+<div class="alert alert-warning border-0 shadow-sm">
+    <h5 class="mb-1"><i class="bi bi-trophy-fill"></i> Recommended Vendor</h5>
     <strong>{{ winner.name }}</strong> ({{ winner.vendor_number }})  
-    — Score: <strong>{{ "%.2f"|format(winner.score) }}</strong>  
-    — Amount: ₦{{ "{:,.2f}".format(winner.amount) }}
+    &nbsp;|&nbsp; Final Score: <strong>{{ "%.2f"|format(winner.final_score) }}</strong>  
+    &nbsp;|&nbsp; Amount: <strong>₦{{ "{:,.2f}".format(winner.amount) }}</strong>
 </div>
 {% endif %}
 
+<div class="row mb-4">
+    <div class="col-lg-7">
+        <div class="card h-100">
+            <div class="card-header">Vendor Final Scores</div>
+            <div class="card-body">
+                <canvas id="scoreChart" height="220"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-5">
+        <div class="card h-100">
+            <div class="card-header">Quick Stats</div>
+            <div class="card-body">
+                <p><strong>Total Quotations:</strong> {{ quotations|length }}</p>
+                <p><strong>Top Score:</strong> {{ "%.2f"|format(winner.final_score) if winner else "—" }}</p>
+                <p class="mb-0 text-muted small">Final Score = 40% System Score + 60% Committee Average</p>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="card">
-    <div class="card-header fw-bold">All Quotations (Ranked by Score)</div>
+    <div class="card-header d-flex justify-content-between">
+        <span>All Quotations (Ranked)</span>
+    </div>
     <div class="table-responsive">
-        <table class="table table-hover mb-0">
+        <table class="table table-hover mb-0 align-middle">
             <thead class="table-light">
                 <tr>
                     <th>Rank</th>
-                    <th>Vendor No</th>
-                    <th>Name</th>
+                    <th>Vendor</th>
                     <th>Amount (₦)</th>
-                    <th>Score</th>
-                    <th>Experience</th>
-                    <th>Tax</th>
-                    <th>Audit</th>
+                    <th>System</th>
+                    <th>Committee</th>
+                    <th>Final</th>
+                    <th>Scores</th>
                     <th>Invoice</th>
-                    <th>Submitted</th>
                 </tr>
             </thead>
             <tbody>
                 {% for q in quotations %}
-                <tr class="{% if loop.first %}winner{% endif %}">
-                    <td>{{ loop.index }}</td>
-                    <td>{{ q.vendor_number }}</td>
-                    <td>{{ q.name }}</td>
+                <tr class="{% if loop.first %}winner-row{% endif %}">
+                    <td><strong>{{ loop.index }}</strong></td>
+                    <td>
+                        <div class="fw-semibold">{{ q.name }}</div>
+                        <small class="text-muted">{{ q.vendor_number }}</small>
+                    </td>
                     <td>{{ "{:,.2f}".format(q.amount) }}</td>
-                    <td><strong>{{ "%.2f"|format(q.score) }}</strong></td>
-                    <td>{{ q.experience }}</td>
-                    <td>{{ q.tax_clearance }}</td>
-                    <td>{{ q.three_yrs_audit }}</td>
+                    <td>{{ "%.1f"|format(q.system_score) }}</td>
+                    <td>{{ "%.1f"|format(q.committee_avg) }}</td>
+                    <td><span class="badge bg-primary score-badge">{{ "%.2f"|format(q.final_score) }}</span></td>
+                    <td>{{ q.num_scores }}/5</td>
                     <td>
                         {% if q.invoice_filename %}
-                            <a href="{{ url_for('download_invoice', filename=q.invoice_filename) }}" class="btn btn-sm btn-outline-primary">PDF</a>
-                        {% else %}
-                            —
-                        {% endif %}
+                            <a href="{{ url_for('download_invoice', filename=q.invoice_filename) }}" class="btn btn-sm btn-outline-primary">
+                                <i class="bi bi-download"></i>
+                            </a>
+                        {% else %}—{% endif %}
                     </td>
-                    <td>{{ q.submitted_at }}</td>
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="10" class="text-center text-muted py-4">No quotations yet</td>
+                    <td colspan="8" class="text-center text-muted py-5">No quotations yet</td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+const ctx = document.getElementById('scoreChart');
+if (ctx) {
+    new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: {{ chart_labels | tojson }},
+            datasets: [{
+                label: 'Final Score',
+                data: {{ chart_scores | tojson }},
+                backgroundColor: '#2b6cb0',
+                borderRadius: 6
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: {
+                y: { beginAtZero: true, max: 100 }
+            }
+        }
+    });
+}
+</script>
 {% endblock %}

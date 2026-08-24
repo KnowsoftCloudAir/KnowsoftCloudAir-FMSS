@@ -1,14 +1,30 @@
 {% extends "base.html" %}
+{% block title %}Home - eProcurement{% endblock %}
+
 {% block content %}
-<div class="row justify-content-center">
-    <div class="col-md-8 text-center">
-        <div class="card p-5">
-            <h1 class="mb-3">Welcome to eProcurement</h1>
-            <p class="lead text-muted">Vendors can submit quotations and upload invoices.  
-            Procurement team can evaluate and select the best vendor.</p>
-            <div class="mt-4">
-                <a href="/submit" class="btn btn-success btn-lg me-3">Submit Quotation</a>
-                <a href="/admin" class="btn btn-primary btn-lg">Admin Dashboard</a>
+<div class="row justify-content-center mt-5">
+    <div class="col-lg-8">
+        <div class="card text-center p-5">
+            {% if logo %}
+                <img src="{{ url_for('static', filename=logo) }}" alt="Logo" style="max-height: 90px; margin: 0 auto 20px;">
+            {% endif %}
+            <h1 class="fw-bold mb-3" style="color: #1a365d;">{{ org_name }}</h1>
+            <h4 class="text-muted mb-4">eProcurement & Vendor Quotation Portal</h4>
+            <p class="lead text-secondary mb-5">
+                Vendors can submit quotations and upload invoices.<br>
+                Procurement Committee members evaluate and score bids.<br>
+                Transparent, fair and professional evaluation process.
+            </p>
+            <div class="d-flex justify-content-center gap-3 flex-wrap">
+                <a href="/submit" class="btn btn-success btn-lg px-4">
+                    <i class="bi bi-file-earmark-plus"></i> Submit Quotation
+                </a>
+                <a href="/committee/login" class="btn btn-primary btn-lg px-4">
+                    <i class="bi bi-people-fill"></i> Committee Login
+                </a>
+                <a href="/admin" class="btn btn-outline-dark btn-lg px-4">
+                    <i class="bi bi-gear"></i> Admin
+                </a>
             </div>
         </div>
     </div>

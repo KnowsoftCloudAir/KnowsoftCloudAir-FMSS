@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Committee Members{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-lg-5">
+        <div class="card mb-4">
+            <div class="card-header">Add Committee Member (Max 5)</div>
+            <div class="card-body">
+                <form method="POST">
+                    <input type="hidden" name="action" value="add">
+                    <div class="mb-3">
+                        <label class="form-label">Full Name</label>
+                        <input type="text" name="name" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Designation</label>
+                        <input type="text" name="designation" class="form-control">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Password</label>
+                        <input type="text" name="password" class="form-control" required>
+                    </div>
+                    <button type="submit" class="btn btn-success">Add Member</button>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-7">
+        <div class="card">
+            <div class="card-header">Current Committee Members</div>
+            <div class="card-body">
+                {% for m in members %}
+                <div class="d-flex justify-content-between align-items-center border-bottom py-2">
+                    <div>
+                        <strong>{{ m.name }}</strong><br>
+                        <small class="text-muted">{{ m.designation or 'Member' }}</small>
+                    </div>
+                    <form method="POST" class="d-inline">
+                        <input type="hidden" name="action" value="delete">
+                        <input type="hidden" name="member_id" value="{{ m.id }}">
+                        <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Remove this member?')">Remove</button>
+                    </form>
+                </div>
+                {% else %}
+                <p class="text-muted">No committee members yet.</p>
+                {% endfor %}
+            </div>
+        </div>
+        <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-secondary mt-3">Back to Dashboard</a>
+    </div>
+</div>
+{% endblock %}
