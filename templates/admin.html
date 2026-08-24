@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2>Procurement Dashboard</h2>
+    <a href="/admin/logout" class="btn btn-outline-danger btn-sm">Logout</a>
+</div>
+
+{% if winner %}
+<div class="alert alert-warning">
+    <h5 class="mb-1">Recommended Vendor</h5>
+    <strong>{{ winner.name }}</strong> ({{ winner.vendor_number }})  
+    — Score: <strong>{{ "%.2f"|format(winner.score) }}</strong>  
+    — Amount: ₦{{ "{:,.2f}".format(winner.amount) }}
+</div>
+{% endif %}
+
+<div class="card">
+    <div class="card-header fw-bold">All Quotations (Ranked by Score)</div>
+    <div class="table-responsive">
+        <table class="table table-hover mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>Rank</th>
+                    <th>Vendor No</th>
+                    <th>Name</th>
+                    <th>Amount (₦)</th>
+                    <th>Score</th>
+                    <th>Experience</th>
+                    <th>Tax</th>
+                    <th>Audit</th>
+                    <th>Invoice</th>
+                    <th>Submitted</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for q in quotations %}
+                <tr class="{% if loop.first %}winner{% endif %}">
+                    <td>{{ loop.index }}</td>
+                    <td>{{ q.vendor_number }}</td>
+                    <td>{{ q.name }}</td>
+                    <td>{{ "{:,.2f}".format(q.amount) }}</td>
+                    <td><strong>{{ "%.2f"|format(q.score) }}</strong></td>
+                    <td>{{ q.experience }}</td>
+                    <td>{{ q.tax_clearance }}</td>
+                    <td>{{ q.three_yrs_audit }}</td>
+                    <td>
+                        {% if q.invoice_filename %}
+                            <a href="{{ url_for('download_invoice', filename=q.invoice_filename) }}" class="btn btn-sm btn-outline-primary">PDF</a>
+                        {% else %}
+                            —
+                        {% endif %}
+                    </td>
+                    <td>{{ q.submitted_at }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="10" class="text-center text-muted py-4">No quotations yet</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

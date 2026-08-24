@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8 text-center">
+        <div class="card p-5">
+            <h1 class="mb-3">Welcome to eProcurement</h1>
+            <p class="lead text-muted">Vendors can submit quotations and upload invoices.  
+            Procurement team can evaluate and select the best vendor.</p>
+            <div class="mt-4">
+                <a href="/submit" class="btn btn-success btn-lg me-3">Submit Quotation</a>
+                <a href="/admin" class="btn btn-primary btn-lg">Admin Dashboard</a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
