@@ -177,6 +177,88 @@ def init_db():
 init_db()
 
 
+def ensure_extra_columns():
+    """Add award / progress columns on existing databases."""
+    alters = [
+        "ALTER TABLE services ADD COLUMN procurement_stage TEXT DEFAULT 'open'",
+        "ALTER TABLE services ADD COLUMN progress_percent REAL DEFAULT 0",
+        "ALTER TABLE services ADD COLUMN awarded_quotation_id INTEGER",
+        "ALTER TABLE quotations ADD COLUMN award_status TEXT DEFAULT 'none'",
+        "ALTER TABLE quotations ADD COLUMN awarded_at TEXT",
+        "ALTER TABLE quotations ADD COLUMN vendor_offer_response TEXT DEFAULT 'pending'",
+        "ALTER TABLE quotations ADD COLUMN vendor_responded_at TEXT",
+        "ALTER TABLE quotations ADD COLUMN lpo_available INTEGER DEFAULT 0",
+        "ALTER TABLE procurement_records ADD COLUMN service_id INTEGER",
+        "ALTER TABLE procurement_records ADD COLUMN progress_percent REAL DEFAULT 0",
+        "ALTER TABLE procurement_records ADD COLUMN stage TEXT DEFAULT 'quotes_received'",
+    ]
+    for sql in alters:
+        try:
+            _exec_sql(sql)
+        except Exception:
+            pass
+
+
+ensure_extra_columns()
+
+
+# Procurement stage labels and progress mapping
+STAGE_META = {
+    "open": {"label": "Open for quotes", "percent": 5},
+    "quotes_received": {"label": "Quotes received", "percent": 25},
+    "under_review": {"label": "Under review", "percent": 45},
+    "vendor_selected": {"label": "Vendor selected", "percent": 60},
+    "in_progress": {"label": "Service in progress", "percent": 80},
+    "completed": {"label": "Service completed", "percent": 100},
+}
+
+
+def compute_service_stage(service_id):
+    """Derive stage from quotations / award / acceptance data."""
+    conn = get_db()
+    service = conn.execute("SELECT * FROM services WHERE id=?", (service_id,)).fetchone()
+    if not service:
+        conn.close()
+        return "open", 0, None
+
+    quotes = conn.execute(
+        "SELECT * FROM quotations WHERE service_id=?", (service_id,)
+    ).fetchall()
+    awarded = conn.execute(
+        "SELECT * FROM quotations WHERE service_id=? AND award_status='awarded'",
+        (service_id,),
+    ).fetchone()
+    conn.close()
+
+    # Prefer explicit stage stored on service if completed/in_progress
+    stored = (service["procurement_stage"] or "open") if "procurement_stage" in service.keys() else "open"
+    if stored in ("completed", "in_progress") and awarded:
+        meta = STAGE_META.get(stored, STAGE_META["open"])
+        pct = service["progress_percent"] if service["progress_percent"] is not None else meta["percent"]
+        return stored, pct, awarded
+
+    if awarded:
+        resp = awarded["vendor_offer_response"] if "vendor_offer_response" in awarded.keys() else "pending"
+        if resp == "accepted":
+            return "in_progress", STAGE_META["in_progress"]["percent"], awarded
+        return "vendor_selected", STAGE_META["vendor_selected"]["percent"], awarded
+
+    if not quotes:
+        return "open", STAGE_META["open"]["percent"], None
+
+    # Any committee scores?
+    conn = get_db()
+    scored = conn.execute(
+        """SELECT COUNT(*) AS c FROM committee_scores cs
+           JOIN quotations q ON cs.quotation_id=q.id WHERE q.service_id=?""",
+        (service_id,),
+    ).fetchone()["c"]
+    conn.close()
+    if scored > 0:
+        return "under_review", STAGE_META["under_review"]["percent"], None
+    return "quotes_received", STAGE_META["quotes_received"]["percent"], None
+
+
 # ---------------------------------------------------------
 # HELPERS
 # ---------------------------------------------------------
@@ -455,11 +537,86 @@ def vendor_dashboard():
     vendor = conn.execute("SELECT * FROM vendors WHERE id=?", (session["vendor_id"],)).fetchone()
     org = conn.execute("SELECT * FROM organizations WHERE id=?", (vendor["organization_id"],)).fetchone()
     quotes = conn.execute(
-        "SELECT q.*, s.title as service_name FROM quotations q LEFT JOIN services s ON q.service_id=s.id WHERE q.vendor_id=? ORDER BY q.submitted_at DESC",
+        """SELECT q.*, s.title as service_name, s.procurement_stage, s.progress_percent
+           FROM quotations q
+           LEFT JOIN services s ON q.service_id=s.id
+           WHERE q.vendor_id=? ORDER BY q.submitted_at DESC""",
         (session["vendor_id"],),
     ).fetchall()
     conn.close()
     return render_template("vendor_dashboard.html", vendor=vendor, org=org, quotations=quotes)
+
+
+@app.route("/vendor/accept_offer/<int:quotation_id>", methods=["POST"])
+@login_required("vendor")
+def vendor_accept_offer(quotation_id):
+    conn = get_db()
+    q = conn.execute(
+        "SELECT * FROM quotations WHERE id=? AND vendor_id=?",
+        (quotation_id, session["vendor_id"]),
+    ).fetchone()
+    if not q:
+        conn.close()
+        flash("Quotation not found.", "danger")
+        return redirect(url_for("vendor_dashboard"), code=303)
+    if (q["award_status"] if "award_status" in q.keys() else "none") != "awarded":
+        conn.close()
+        flash("This quotation has not been awarded yet.", "warning")
+        return redirect(url_for("vendor_dashboard"), code=303)
+
+    action = request.form.get("action", "accepted")
+    if action not in ("accepted", "declined"):
+        action = "accepted"
+    conn.execute(
+        "UPDATE quotations SET vendor_offer_response=?, vendor_responded_at=? WHERE id=?",
+        (action, datetime.now().isoformat(), quotation_id),
+    )
+    if action == "accepted" and q["service_id"]:
+        conn.execute(
+            "UPDATE services SET procurement_stage=?, progress_percent=? WHERE id=?",
+            ("in_progress", STAGE_META["in_progress"]["percent"], q["service_id"]),
+        )
+    elif action == "declined" and q["service_id"]:
+        conn.execute(
+            "UPDATE services SET procurement_stage=?, progress_percent=? WHERE id=?",
+            ("vendor_selected", STAGE_META["vendor_selected"]["percent"], q["service_id"]),
+        )
+    conn.commit()
+    conn.close()
+    flash(
+        "You have accepted the offer. Service is now in progress."
+        if action == "accepted"
+        else "You have declined the offer. The organization has been notified.",
+        "success" if action == "accepted" else "warning",
+    )
+    return redirect(url_for("vendor_dashboard"), code=303)
+
+
+@app.route("/vendor/download_lpo/<int:quotation_id>")
+@login_required("vendor")
+def vendor_download_lpo(quotation_id):
+    """Vendor downloads LPO only after award."""
+    conn = get_db()
+    q = conn.execute(
+        """SELECT q.*, v.name as vendor_name, v.email as vendor_email,
+                  o.name as org_name, o.logo_filename
+           FROM quotations q
+           JOIN vendors v ON q.vendor_id=v.id
+           JOIN organizations o ON q.organization_id=o.id
+           WHERE q.id=? AND q.vendor_id=?""",
+        (quotation_id, session["vendor_id"]),
+    ).fetchone()
+    conn.close()
+    if not q:
+        flash("Not found.", "danger")
+        return redirect(url_for("vendor_dashboard"), code=303)
+    if (q["award_status"] if "award_status" in q.keys() else "none") != "awarded":
+        flash("LPO is only available after the contract is awarded.", "warning")
+        return redirect(url_for("vendor_dashboard"), code=303)
+    if not (q["lpo_available"] if "lpo_available" in q.keys() else 0):
+        flash("LPO not yet released.", "warning")
+        return redirect(url_for("vendor_dashboard"), code=303)
+    return _build_lpo_pdf(q)
 
 
 @app.route("/vendor/quotation", methods=["GET", "POST"])
@@ -794,15 +951,147 @@ def admin_service_dashboard(service_id):
         return redirect(url_for("admin_dashboard"))
     org = conn.execute("SELECT * FROM organizations WHERE id=?", (service["organization_id"],)).fetchone()
     rankings = get_final_rankings(organization_id=service["organization_id"], service_id=service_id)
-    winner = rankings[0] if rankings else None
+    stage, percent, awarded = compute_service_stage(service_id)
+    # Sync derived stage onto service if still early stages
+    if stage in ("open", "quotes_received", "under_review", "vendor_selected"):
+        try:
+            conn.execute(
+                "UPDATE services SET procurement_stage=?, progress_percent=? WHERE id=?",
+                (stage, percent, service_id),
+            )
+            conn.commit()
+            service = conn.execute("SELECT * FROM services WHERE id=?", (service_id,)).fetchone()
+        except Exception:
+            pass
     conn.close()
+    stage_label = STAGE_META.get(stage, {}).get("label", stage)
     return render_template(
         "admin_service_dashboard.html",
         service=service,
         org=org,
         rankings=rankings,
-        winner=winner,
+        stage=stage,
+        stage_label=stage_label,
+        progress_percent=percent,
+        awarded=awarded,
+        stage_meta=STAGE_META,
     )
+
+
+@app.route("/admin/award/<int:quotation_id>", methods=["POST"])
+@login_required("admin")
+def admin_award_contract(quotation_id):
+    conn = get_db()
+    q = conn.execute(
+        """SELECT q.*, v.name as vendor_name, v.email as vendor_email, o.name as org_name
+           FROM quotations q
+           JOIN vendors v ON q.vendor_id=v.id
+           JOIN organizations o ON q.organization_id=o.id
+           WHERE q.id=?""",
+        (quotation_id,),
+    ).fetchone()
+    if not q:
+        conn.close()
+        flash("Quotation not found.", "danger")
+        return redirect(url_for("admin_dashboard"), code=303)
+
+    # Clear previous awards on same service
+    if q["service_id"]:
+        conn.execute(
+            "UPDATE quotations SET award_status='none', lpo_available=0 WHERE service_id=? AND id!=?",
+            (q["service_id"], quotation_id),
+        )
+        conn.execute(
+            "UPDATE services SET procurement_stage=?, progress_percent=?, awarded_quotation_id=? WHERE id=?",
+            (
+                "vendor_selected",
+                STAGE_META["vendor_selected"]["percent"],
+                quotation_id,
+                q["service_id"],
+            ),
+        )
+
+    conn.execute(
+        """UPDATE quotations SET award_status='awarded', awarded_at=?,
+           vendor_offer_response='pending', lpo_available=1, status='awarded'
+           WHERE id=?""",
+        (datetime.now().isoformat(), quotation_id),
+    )
+    # Procurement record
+    existing = conn.execute(
+        "SELECT id FROM procurement_records WHERE quotation_id=?", (quotation_id,)
+    ).fetchone()
+    if existing:
+        conn.execute(
+            """UPDATE procurement_records SET winning_vendor_id=?, lpo_sent=1, lpo_sent_at=?,
+               stage='vendor_selected', progress_percent=?, service_id=? WHERE quotation_id=?""",
+            (
+                q["vendor_id"],
+                datetime.now().isoformat(),
+                STAGE_META["vendor_selected"]["percent"],
+                q["service_id"],
+                quotation_id,
+            ),
+        )
+    else:
+        conn.execute(
+            """INSERT INTO procurement_records
+               (quotation_id, organization_id, winning_vendor_id, lpo_sent, lpo_sent_at,
+                stage, progress_percent, service_id)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (
+                quotation_id,
+                q["organization_id"],
+                q["vendor_id"],
+                1,
+                datetime.now().isoformat(),
+                "vendor_selected",
+                STAGE_META["vendor_selected"]["percent"],
+                q["service_id"],
+            ),
+        )
+    conn.commit()
+    conn.close()
+
+    send_email_simulation(
+        q["vendor_email"],
+        f"Contract Awarded – {q['org_name']}",
+        f"Dear {q['vendor_name']},\n\n"
+        f"Congratulations! {q['org_name']} has awarded you the contract for: {q['service_title']}.\n"
+        f"Contract value: ₦{(q['total_amount'] or 0):,.2f}\n\n"
+        f"Please log in to your vendor dashboard to:\n"
+        f"  1. Download the Local Purchase Order (LPO)\n"
+        f"  2. Accept the offer to begin service delivery\n\n"
+        f"Regards,\n{q['org_name']}",
+    )
+    flash(f"Contract awarded to {q['vendor_name']}. LPO is now available on the vendor dashboard.", "success")
+    if q["service_id"]:
+        return redirect(url_for("admin_service_dashboard", service_id=q["service_id"]), code=303)
+    return redirect(url_for("admin_dashboard"), code=303)
+
+
+@app.route("/admin/service/<int:service_id>/set_progress", methods=["POST"])
+@login_required("admin")
+def admin_set_progress(service_id):
+    stage = request.form.get("stage", "in_progress")
+    try:
+        percent = float(request.form.get("progress_percent") or STAGE_META.get(stage, {}).get("percent", 80))
+    except ValueError:
+        percent = 80
+    percent = max(0, min(100, percent))
+    if stage not in STAGE_META:
+        stage = "in_progress"
+    if stage == "completed":
+        percent = 100
+    conn = get_db()
+    conn.execute(
+        "UPDATE services SET procurement_stage=?, progress_percent=? WHERE id=?",
+        (stage, percent, service_id),
+    )
+    conn.commit()
+    conn.close()
+    flash(f"Status updated to: {STAGE_META[stage]['label']} ({percent:.0f}%)", "success")
+    return redirect(url_for("admin_service_dashboard", service_id=service_id), code=303)
 
 
 @app.route("/admin/generate_report/<int:org_id>")
@@ -910,48 +1199,33 @@ def generate_report(org_id):
     )
 
 
-@app.route("/admin/generate_lpo/<int:quotation_id>")
-@login_required("admin")
-def generate_lpo(quotation_id):
-    conn = get_db()
-    q = conn.execute(
-        """SELECT q.*, v.name as vendor_name, v.email as vendor_email, v.official_address,
-                  o.name as org_name, o.logo_filename
-           FROM quotations q
-           JOIN vendors v ON q.vendor_id=v.id
-           JOIN organizations o ON q.organization_id=o.id
-           WHERE q.id=?""",
-        (quotation_id,),
-    ).fetchone()
-    conn.close()
-    if not q:
-        flash("Quotation not found.", "danger")
-        return redirect(url_for("admin_dashboard"))
-
+def _build_lpo_pdf(q):
+    """Shared LPO PDF builder. q must include vendor_name, org_name, logo_filename, etc."""
     today = datetime.now().strftime("%d %B %Y")
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4)
     styles = getSampleStyleSheet()
     story = []
 
-    if q["logo_filename"] and os.path.exists(os.path.join("static", q["logo_filename"])):
+    logo = q["logo_filename"] if "logo_filename" in q.keys() else None
+    if logo and os.path.exists(os.path.join("static", logo)):
         try:
-            story.append(Image(os.path.join("static", q["logo_filename"]), width=1.8 * inch, height=0.9 * inch))
+            story.append(Image(os.path.join("static", logo), width=1.8 * inch, height=0.9 * inch))
             story.append(Spacer(1, 10))
         except Exception:
             pass
 
-    story.append(Paragraph(f"<b>{q['org_name']}</b>", styles["Title"]))
+    org_name = q["org_name"] if "org_name" in q.keys() else "Organization"
+    vendor_name = q["vendor_name"] if "vendor_name" in q.keys() else "Vendor"
+    story.append(Paragraph(f"<b>{org_name}</b>", styles["Title"]))
     story.append(Paragraph("<b>LOCAL PURCHASE ORDER (LPO)</b>", styles["Heading1"]))
     story.append(Paragraph(f"Date of Issue: {today}", styles["Normal"]))
     story.append(Spacer(1, 20))
-
     story.append(Paragraph("<b>1. SUPPLIER INFORMATION</b>", styles["Heading2"]))
-    story.append(Paragraph(f"<b>Vendor Name:</b> {q['vendor_name']}", styles["Normal"]))
+    story.append(Paragraph(f"<b>Vendor Name:</b> {vendor_name}", styles["Normal"]))
     story.append(Paragraph(f"<b>Service:</b> {q['service_title'] or 'N/A'}", styles["Normal"]))
     story.append(Paragraph(f"<b>Total Contract Value:</b> ₦{q['total_amount'] or 0:,.2f}", styles["Normal"]))
     story.append(Spacer(1, 15))
-
     story.append(Paragraph("<b>2. JUSTIFICATION</b>", styles["Heading2"]))
     story.append(
         Paragraph(
@@ -961,7 +1235,6 @@ def generate_lpo(quotation_id):
         )
     )
     story.append(Spacer(1, 15))
-
     story.append(Paragraph("<b>3. TERMS AND CONDITIONS</b>", styles["Heading2"]))
     story.append(
         Paragraph(
@@ -980,21 +1253,45 @@ def generate_lpo(quotation_id):
     story.append(Paragraph("Generated by Knowsoft eProcurement System", styles["Normal"]))
     doc.build(story)
     buffer.seek(0)
-
-    # Optionally mark LPO sent and email vendor
-    send_email_simulation(
-        q["vendor_email"],
-        f"Local Purchase Order – {q['org_name']}",
-        f"Dear {q['vendor_name']},\n\nPlease find attached / download your LPO for service: {q['service_title']}.\n"
-        f"Contract Value: ₦{q['total_amount'] or 0:,.2f}\n\nRegards,\n{q['org_name']}",
-    )
-
     return send_file(
         buffer,
         as_attachment=True,
-        download_name=f"LPO_{q['vendor_name'][:15]}_{datetime.now().strftime('%Y%m%d')}.pdf",
+        download_name=f"LPO_{str(vendor_name)[:15]}_{datetime.now().strftime('%Y%m%d')}.pdf",
         mimetype="application/pdf",
     )
+
+
+@app.route("/admin/generate_lpo/<int:quotation_id>")
+@login_required("admin")
+def generate_lpo(quotation_id):
+    conn = get_db()
+    q = conn.execute(
+        """SELECT q.*, v.name as vendor_name, v.email as vendor_email, v.official_address,
+                  o.name as org_name, o.logo_filename
+           FROM quotations q
+           JOIN vendors v ON q.vendor_id=v.id
+           JOIN organizations o ON q.organization_id=o.id
+           WHERE q.id=?""",
+        (quotation_id,),
+    ).fetchone()
+    # Ensure LPO flag is set when admin downloads
+    if q:
+        conn.execute(
+            "UPDATE quotations SET lpo_available=1 WHERE id=?", (quotation_id,)
+        )
+        conn.commit()
+    conn.close()
+    if not q:
+        flash("Quotation not found.", "danger")
+        return redirect(url_for("admin_dashboard"), code=303)
+
+    send_email_simulation(
+        q["vendor_email"],
+        f"Local Purchase Order – {q['org_name']}",
+        f"Dear {q['vendor_name']},\n\nPlease download your LPO for service: {q['service_title']}.\n"
+        f"Contract Value: ₦{q['total_amount'] or 0:,.2f}\n\nRegards,\n{q['org_name']}",
+    )
+    return _build_lpo_pdf(q)
 
 
 @app.route("/download/<path:filename>")

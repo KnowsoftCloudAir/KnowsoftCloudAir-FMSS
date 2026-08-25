@@ -163,8 +163,16 @@
                             <td>{{ r.system_score }}</td>
                             <td>{{ r.committee_avg }} ({{ r.num_scores }})</td>
                             <td><strong>{{ r.final_score }}</strong></td>
-                            <td>
-                                <a href="{{ url_for('generate_lpo', quotation_id=r.id) }}" class="btn btn-sm btn-success">LPO</a>
+                            <td class="text-nowrap">
+                                {% if r.award_status == 'awarded' %}
+                                <span class="badge bg-success me-1">Awarded</span>
+                                <a href="{{ url_for('generate_lpo', quotation_id=r.id) }}" class="btn btn-sm btn-outline-success">LPO</a>
+                                {% else %}
+                                <form method="POST" action="{{ url_for('admin_award_contract', quotation_id=r.id) }}" class="d-inline"
+                                      onsubmit="return confirm('Award contract to this vendor?')">
+                                    <button type="submit" class="btn btn-sm btn-success"><i class="bi bi-trophy"></i> Award</button>
+                                </form>
+                                {% endif %}
                                 {% if r.invoice_filename %}
                                 <a href="{{ url_for('download_file', filename=r.invoice_filename) }}" class="btn btn-sm btn-outline-secondary">Invoice</a>
                                 {% endif %}
