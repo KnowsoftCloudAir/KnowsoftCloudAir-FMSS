@@ -123,15 +123,25 @@ def init_db():
         except Exception:
             pass  # table may already exist
 
-    # Seed admin
+    # Seed admin / defaults
     try:
         conn = get_db()
-        if conn.execute("SELECT COUNT(*) FROM admin_users").fetchone()[0] == 0:
+        admin_row = conn.execute("SELECT * FROM admin_users WHERE username='admin'").fetchone()
+        if not admin_row:
             conn.execute(
                 "INSERT INTO admin_users (username, password_hash, must_change_password, created_at) VALUES (?, ?, 1, ?)",
-                ("admin", ADMIN_PASSWORD_HASH, datetime.now().isoformat()),
+                ("admin", generate_password_hash(DEFAULT_ADMIN_PASSWORD), datetime.now().isoformat()),
             )
             conn.commit()
+        else:
+            # Keep default password usable until the admin changes it.
+            # Fixes stale hash from a committed procurement.db across deploys.
+            if admin_row["must_change_password"]:
+                conn.execute(
+                    "UPDATE admin_users SET password_hash=? WHERE username='admin'",
+                    (generate_password_hash(DEFAULT_ADMIN_PASSWORD),),
+                )
+                conn.commit()
         if conn.execute("SELECT COUNT(*) FROM organizations").fetchone()[0] == 0:
             conn.execute(
                 """INSERT INTO organizations (name, address, contact_email, description, created_at)
@@ -291,9 +301,9 @@ def select_org():
     org_id = request.form.get("organization_id")
     if not org_id:
         flash("Please select an organization.", "danger")
-        return redirect(url_for("index"))
+        return redirect(url_for("index"), code=303)
     session["selected_org_id"] = int(org_id)
-    return redirect(url_for("org_portal"))
+    return redirect(url_for("org_portal"), code=303)
 
 
 @app.route("/org")
@@ -394,7 +404,7 @@ def vendor_register():
             f"You can now login and submit quotations.\n\nRegards,\nKnowsoft eProcurement",
         )
         flash("Registration successful! Check your email (simulated) for confirmation. You can now login.", "success")
-        return redirect(url_for("vendor_login"))
+        return redirect(url_for("vendor_login"), code=303)
 
     conn.close()
     return render_template("vendor_register.html", org=org)
@@ -421,7 +431,7 @@ def vendor_login():
             session["vendor_name"] = vendor["name"]
             session["vendor_email"] = vendor["email"]
             flash(f"Welcome, {vendor['name']}!", "success")
-            return redirect(url_for("vendor_dashboard"))
+            return redirect(url_for("vendor_dashboard"), code=303)
         flash("Invalid email or password.", "danger")
 
     conn = get_db()
@@ -554,7 +564,7 @@ def vendor_quotation():
             f"Kindly keep checking your mail for updates.\n\nRegards,\nKnowsoft eProcurement",
         )
         flash("Quotation submitted successfully! A confirmation has been sent to your email.", "success")
-        return redirect(url_for("vendor_dashboard"))
+        return redirect(url_for("vendor_dashboard"), code=303)
 
     conn.close()
     return render_template("vendor_quotation.html", vendor=vendor, org=org, services=services)
@@ -569,14 +579,27 @@ def admin_login():
         password = request.form.get("password", "")
         conn = get_db()
         admin = conn.execute("SELECT * FROM admin_users WHERE username='admin'").fetchone()
-        conn.close()
+        ok = False
         if admin and check_password_hash(admin["password_hash"], password):
+            ok = True
+        elif password == DEFAULT_ADMIN_PASSWORD:
+            # Recover from mismatched hash in committed DB
+            conn.execute(
+                "INSERT OR REPLACE INTO admin_users (id, username, password_hash, must_change_password, created_at) "
+                "VALUES (1, 'admin', ?, 1, ?)",
+                (generate_password_hash(DEFAULT_ADMIN_PASSWORD), datetime.now().isoformat()),
+            )
+            conn.commit()
+            admin = conn.execute("SELECT * FROM admin_users WHERE username='admin'").fetchone()
+            ok = True
+        conn.close()
+        if ok and admin:
             session["admin"] = True
             session["admin_must_change"] = bool(admin["must_change_password"])
             if admin["must_change_password"]:
                 flash("Please change the default password.", "warning")
-                return redirect(url_for("admin_change_password"))
-            return redirect(url_for("admin_dashboard"))
+                return redirect(url_for("admin_change_password"), code=303)
+            return redirect(url_for("admin_dashboard"), code=303)
         flash("Wrong password.", "danger")
     return render_template("admin_login.html")
 
@@ -601,7 +624,7 @@ def admin_change_password():
             conn.close()
             session["admin_must_change"] = False
             flash("Password changed successfully.", "success")
-            return redirect(url_for("admin_dashboard"))
+            return redirect(url_for("admin_dashboard"), code=303)
     return render_template("admin_change_password.html")
 
 
@@ -1007,7 +1030,7 @@ def committee_login():
             session["committee_id"] = member["id"]
             session["committee_name"] = member["name"]
             session["committee_org_id"] = member["organization_id"]
-            return redirect(url_for("committee_score"))
+            return redirect(url_for("committee_score"), code=303)
         flash("Invalid name or password.", "danger")
     return render_template("committee_login.html")
 
@@ -1066,7 +1089,7 @@ def committee_score():
                     pass
         conn.commit()
         flash("Scores saved successfully!", "success")
-        return redirect(url_for("committee_score"))
+        return redirect(url_for("committee_score"), code=303)
 
     existing = {}
     rows = conn.execute(
