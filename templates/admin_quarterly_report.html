@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}Quarterly Procurement Report{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2 class="mb-0">
+        <i class="bi bi-calendar3"></i> Quarterly Procurement Report
+    </h2>
+    <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-secondary btn-sm">
+        ← Back to Dashboard
+    </a>
+</div>
+
+<!-- Filters -->
+<div class="card mb-4">
+    <div class="card-body">
+        <form method="get" action="{{ url_for('admin_quarterly_report') }}" class="row g-3 align-items-end">
+            <div class="col-md-4">
+                <label class="form-label fw-semibold">Recipient Organization</label>
+                <select name="org_id" class="form-select">
+                    <option value="">— All Organizations —</option>
+                    {% for o in orgs %}
+                    <option value="{{ o.id }}" {% if selected_org == o.id|string %}selected{% endif %}>
+                        {{ o.name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label fw-semibold">Year</label>
+                <select name="year" class="form-select">
+                    {% for y in years %}
+                    <option value="{{ y }}" {% if selected_year == y|string %}selected{% endif %}>{{ y }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label fw-semibold">Quarter</label>
+                <select name="quarter" class="form-select">
+                    <option value="1" {% if selected_quarter == '1' %}selected{% endif %}>Q1 (Jan–Mar)</option>
+                    <option value="2" {% if selected_quarter == '2' %}selected{% endif %}>Q2 (Apr–Jun)</option>
+                    <option value="3" {% if selected_quarter == '3' %}selected{% endif %}>Q3 (Jul–Sep)</option>
+                    <option value="4" {% if selected_quarter == '4' %}selected{% endif %}>Q4 (Oct–Dec)</option>
+                </select>
+            </div>
+            <div class="col-md-4">
+                <button type="submit" class="btn btn-primary me-2">
+                    <i class="bi bi-funnel"></i> Generate Report
+                </button>
+                <a href="{{ url_for('admin_quarterly_report_pdf', org_id=selected_org, year=selected_year, quarter=selected_quarter) }}"
+                   class="btn btn-outline-danger me-1">
+                    <i class="bi bi-file-pdf"></i> PDF
+                </a>
+                <a href="{{ url_for('admin_quarterly_report_excel', org_id=selected_org, year=selected_year, quarter=selected_quarter) }}"
+                   class="btn btn-outline-success">
+                    <i class="bi bi-file-excel"></i> Excel
+                </a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Summary cards -->
+<div class="row g-3 mb-4">
+    <div class="col-md-4">
+        <div class="card stat-card border-primary">
+            <div class="card-body">
+                <h3 class="text-primary">{{ total_count }}</h3>
+                <div class="text-muted">Completed / Awarded Procurements</div>
+                <small class="text-muted">{{ quarter_label }}</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card stat-card border-success">
+            <div class="card-body">
+                <h3 class="text-success">₦{{ "{:,.0f}".format(total_amount) }}</h3>
+                <div class="text-muted">Total Contract Value</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card stat-card border-info">
+            <div class="card-body">
+                <h3 class="text-info">{{ avg_score }}</h3>
+                <div class="text-muted">Average Final Score</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Detailed table -->
+<div class="card">
+    <div class="card-header bg-white d-flex justify-content-between align-items-center">
+        <h5 class="mb-0">Detailed Procurement List – {{ quarter_label }}</h5>
+        <span class="badge bg-secondary">{{ total_count }} record(s)</span>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-hover table-sm mb-0">
+            <thead class="table-light">
+                <tr>
+                    <th>#</th>
+                    <th>Service / Item Provided</th>
+                    <th>Vendor Awarded</th>
+                    <th class="text-center">System Score</th>
+                    <th class="text-center">Committee Score</th>
+                    <th class="text-center">Final Score</th>
+                    <th class="text-end">Final Amount (₦)</th>
+                    <th>Award Date</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in records %}
+                <tr>
+                    <td>{{ loop.index }}</td>
+                    <td>
+                        <strong>{{ r.service_display }}</strong>
+                        {% if r.org_name and not selected_org %}
+                        <br><small class="text-muted">{{ r.org_name }}</small>
+                        {% endif %}
+                    </td>
+                    <td>{{ r.vendor_name }}</td>
+                    <td class="text-center">{{ "%.1f"|format(r.system_score) }}</td>
+                    <td class="text-center">{{ "%.1f"|format(r.committee_avg) }}</td>
+                    <td class="text-center">
+                        <span class="badge bg-primary">{{ "%.1f"|format(r.final_score) }}</span>
+                    </td>
+                    <td class="text-end fw-semibold">₦{{ "{:,.0f}".format(r.amount) }}</td>
+                    <td>{{ r.award_date or "—" }}</td>
+                    <td>
+                        {% if r.stage_label == "Service completed" %}
+                            <span class="badge bg-success">{{ r.stage_label }}</span>
+                        {% else %}
+                            <span class="badge bg-warning text-dark">{{ r.stage_label }}</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="9" class="text-center text-muted py-5">
+                        <i class="bi bi-inbox" style="font-size:2rem;"></i><br>
+                        No awarded or completed procurements found for the selected organization and quarter.<br>
+                        <small>Make sure contracts have been awarded and (optionally) marked as completed.</small>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            {% if records %}
+            <tfoot class="table-light">
+                <tr>
+                    <th colspan="6" class="text-end">Total Contract Value:</th>
+                    <th class="text-end">₦{{ "{:,.0f}".format(total_amount) }}</th>
+                    <th colspan="2"></th>
+                </tr>
+            </tfoot>
+            {% endif %}
+        </table>
+    </div>
+</div>
+
+<div class="mt-3 text-muted small">
+    <p class="mb-1">
+        <strong>Note:</strong> This report shows all procurements where a vendor has been <em>awarded</em>
+        in the selected quarter. Scores combine System evaluation (40%) and Committee average (60%).
+    </p>
+    <p class="mb-0">
+        To include only fully completed services, mark the service stage as “Service completed” in the service dashboard.
+    </p>
+</div>
+{% endblock %}
