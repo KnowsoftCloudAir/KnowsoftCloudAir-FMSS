@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Vendor Registration – {{ org.name }}{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-9">
+        <div class="card p-4">
+            <h3 class="mb-1">Vendor Registration</h3>
+            <p class="text-muted">Registering for: <strong>{{ org.name }}</strong></p>
+            <hr>
+            <form method="POST" enctype="multipart/form-data">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label required">Name of Organization</label>
+                        <input type="text" name="name" class="form-control" required>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">CAC No.</label>
+                        <input type="text" name="cac_no" class="form-control">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">State Registration</label>
+                        <input type="text" name="state_registration" class="form-control">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Tax Clearance</label>
+                        <input type="text" name="tax_clearance" class="form-control" placeholder="Yes / No or Ref">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">TIN</label>
+                        <input type="text" name="tin" class="form-control">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Bank Name</label>
+                        <input type="text" name="bank_name" class="form-control">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Bank Account Number</label>
+                        <input type="text" name="bank_account" class="form-control">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Type of Service Provided</label>
+                        <input type="text" name="service_type" class="form-control">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Official Address</label>
+                        <input type="text" name="official_address" class="form-control">
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label">Qualifications</label>
+                        <textarea name="qualifications" class="form-control" rows="2"></textarea>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label">Clientele Sample (max 4)</label>
+                        <div class="row g-2">
+                            {% for i in range(1,5) %}
+                            <div class="col-md-6">
+                                <input type="text" name="clientele_{{ i }}" class="form-control" placeholder="Client {{ i }}">
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label required">Email</label>
+                        <input type="email" name="email" class="form-control" required>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Phone Number</label>
+                        <input type="text" name="phone" class="form-control">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label required">Password</label>
+                        <input type="password" name="password" class="form-control" required minlength="6">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Upload CAC (PDF/Image)</label>
+                        <input type="file" name="cac_file" class="form-control" accept=".pdf,.png,.jpg,.jpeg">
+                    </div>
+                </div>
+                <div class="mt-4 d-flex gap-2">
+                    <button type="submit" class="btn btn-primary btn-lg">
+                        <i class="bi bi-check-circle"></i> Submit Registration
+                    </button>
+                    <a href="{{ url_for('vendor_login') }}" class="btn btn-outline-secondary">Already registered? Login</a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

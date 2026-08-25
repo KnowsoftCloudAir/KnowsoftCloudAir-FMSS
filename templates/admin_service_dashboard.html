@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Service Dashboard – {{ service.title }}{% endblock %}
+{% block content %}
+<nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="{{ url_for('admin_dashboard') }}">Admin</a></li>
+        <li class="breadcrumb-item"><a href="{{ url_for('admin_org_detail', org_id=org.id) }}">{{ org.name }}</a></li>
+        <li class="breadcrumb-item active">{{ service.title }}</li>
+    </ol>
+</nav>
+
+<h2>{{ service.title }}</h2>
+<p class="text-muted">{{ service.specification or '' }} {% if service.deadline %}· Deadline: {{ service.deadline }}{% endif %}</p>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <h3>{{ rankings|length }}</h3>
+            <div class="text-muted">Quotations Received</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <h3>₦{{ "{:,.0f}".format(rankings|sum(attribute='total_amount') if rankings else 0) }}</h3>
+            <div class="text-muted">Total Quoted Value</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <h3>{% if winner %}{{ winner.final_score }}{% else %}—{% endif %}</h3>
+            <div class="text-muted">Top Score</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <h3>{% if winner %}{{ winner.vendor_name[:15] }}{% else %}—{% endif %}</h3>
+            <div class="text-muted">Leading Vendor</div>
+        </div>
+    </div>
+</div>
+
+{% if winner %}
+<div class="alert alert-success">
+    <strong>Recommended Winner:</strong> {{ winner.vendor_name }} —
+    ₦{{ "{:,.2f}".format(winner.total_amount or 0) }} —
+    Final Score {{ winner.final_score }}
+    <a href="{{ url_for('generate_lpo', quotation_id=winner.id) }}" class="btn btn-sm btn-success ms-3">Generate & Send LPO</a>
+</div>
+{% endif %}
+
+<div class="card">
+    <div class="table-responsive">
+        <table class="table mb-0">
+            <thead>
+                <tr>
+                    <th>Rank</th>
+                    <th>Vendor</th>
+                    <th>Amount</th>
+                    <th>System Score</th>
+                    <th>Committee Avg</th>
+                    <th>Final Score</th>
+                    <th>Docs</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in rankings %}
+                <tr class="{% if loop.first %}table-warning{% endif %}">
+                    <td>{{ loop.index }}</td>
+                    <td>{{ r.vendor_name }}</td>
+                    <td>₦{{ "{:,.0f}".format(r.total_amount or 0) }}</td>
+                    <td>{{ r.system_score }}</td>
+                    <td>{{ r.committee_avg }}</td>
+                    <td><strong>{{ r.final_score }}</strong></td>
+                    <td>
+                        {% if r.invoice_filename %}
+                        <a href="{{ url_for('download_file', filename=r.invoice_filename) }}">Invoice</a>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7" class="text-center text-muted">No quotations submitted for this service yet</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

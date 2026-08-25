@@ -1,7 +1,4 @@
-flask
-pandas
-openpyxl
-werkzeug
-gunicorn
-reportlab
-matplotlib
+Flask>=3.0.0
+Werkzeug>=3.0.0
+pandas>=2.0.0
+reportlab>=4.0.0

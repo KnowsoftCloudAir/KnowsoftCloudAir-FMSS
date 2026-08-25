@@ -1,50 +1,78 @@
 {% extends "base.html" %}
-{% block title %}Score Quotations{% endblock %}
-
+{% block title %}Committee Evaluation{% endblock %}
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
     <div>
-        <h3 class="mb-0">Score Quotations</h3>
-        <small class="text-muted">Logged in as: <strong>{{ member_name }}</strong></small>
+        <h2 class="mb-0">Evaluation Panel</h2>
+        <small class="text-muted">Logged in as {{ member_name }}</small>
     </div>
-    <a href="{{ url_for('committee_logout') }}" class="btn btn-outline-danger btn-sm">Logout</a>
+    <form method="POST" action="{{ url_for('committee_upload_signature') }}" enctype="multipart/form-data" class="d-flex gap-2 align-items-center">
+        <input type="file" name="signature" class="form-control form-control-sm" accept="image/*,.pdf" style="max-width:200px">
+        <button class="btn btn-sm btn-outline-secondary">Upload Signature</button>
+    </form>
 </div>
+
+{% if criteria %}
+<div class="alert alert-info">
+    <strong>Scoring Criteria:</strong>
+    {% for c in criteria %}
+    <span class="badge bg-secondary me-1">{{ c.name }} ({{ c.weight }}%)</span>
+    {% endfor %}
+    — Enter an overall score 0–100 for each vendor.
+</div>
+{% endif %}
 
 <form method="POST">
     <div class="card">
-        <div class="card-body">
-            <p class="text-muted">Enter a score from 0 to 100 for each vendor. You can also leave a short comment.</p>
-            
-            {% for q in quotations %}
-            <div class="border rounded p-3 mb-3 bg-white">
-                <div class="row align-items-center">
-                    <div class="col-md-5">
-                        <strong>{{ q.name }}</strong><br>
-                        <small class="text-muted">{{ q.vendor_number }} | ₦{{ "{:,.2f}".format(q.amount) }}</small>
-                        <div class="small mt-1">{{ q.description or '' }}</div>
-                    </div>
-                    <div class="col-md-2">
-                        <label class="form-label small mb-1">Score (0-100)</label>
-                        <input type="number" name="score_{{ q.id }}" class="form-control" 
-                               min="0" max="100" step="0.5"
-                               value="{{ existing[q.id].score if q.id in existing else '' }}">
-                    </div>
-                    <div class="col-md-5">
-                        <label class="form-label small mb-1">Comment (optional)</label>
-                        <input type="text" name="comment_{{ q.id }}" class="form-control"
-                               value="{{ existing[q.id].comment if q.id in existing else '' }}">
-                    </div>
-                </div>
-            </div>
-            {% else %}
-            <p class="text-muted">No quotations available yet.</p>
-            {% endfor %}
+        <div class="table-responsive">
+            <table class="table align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Vendor</th>
+                        <th>Service</th>
+                        <th>Amount (₦)</th>
+                        <th>Docs</th>
+                        <th style="width:120px">Score (0-100)</th>
+                        <th>Comment</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for q in quotations %}
+                    <tr>
+                        <td>
+                            <strong>{{ q.vendor_name }}</strong>
+                        </td>
+                        <td>{{ q.service_title or '—' }}</td>
+                        <td>{{ "{:,.0f}".format(q.total_amount or 0) }}</td>
+                        <td>
+                            {% if q.invoice_filename %}
+                            <a href="{{ url_for('download_file', filename=q.invoice_filename) }}" class="btn btn-sm btn-outline-primary">Invoice</a>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <input type="number" name="score_{{ q.id }}" class="form-control form-control-sm"
+                                   min="0" max="100" step="0.5"
+                                   value="{{ existing[q.id].score if existing.get(q.id) else '' }}">
+                        </td>
+                        <td>
+                            <input type="text" name="comment_{{ q.id }}" class="form-control form-control-sm"
+                                   value="{{ existing[q.id].comment if existing.get(q.id) else '' }}"
+                                   placeholder="Optional comment">
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="6" class="text-center text-muted py-4">No quotations available for scoring</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
         </div>
     </div>
+    {% if quotations %}
     <div class="mt-3">
         <button type="submit" class="btn btn-success btn-lg">
-            <i class="bi bi-check2-circle"></i> Save My Scores
+            <i class="bi bi-check2-all"></i> Save All Scores
         </button>
     </div>
+    {% endif %}
 </form>
 {% endblock %}

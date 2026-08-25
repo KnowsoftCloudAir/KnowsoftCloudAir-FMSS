@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Manage Organizations{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between mb-4">
+    <h2>Recipient Organizations</h2>
+    <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-secondary">Back to Dashboard</a>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-5">
+        <div class="card p-4">
+            <h5>Register New Organization</h5>
+            <form method="POST" enctype="multipart/form-data">
+                <input type="hidden" name="action" value="add">
+                <div class="mb-3">
+                    <label class="form-label required">Name</label>
+                    <input type="text" name="name" class="form-control" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Logo</label>
+                    <input type="file" name="logo" class="form-control" accept="image/*">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Address</label>
+                    <input type="text" name="address" class="form-control">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Contact Email</label>
+                    <input type="email" name="contact_email" class="form-control">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Contact Phone</label>
+                    <input type="text" name="contact_phone" class="form-control">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Description</label>
+                    <textarea name="description" class="form-control" rows="2"></textarea>
+                </div>
+                <button type="submit" class="btn btn-primary">Add Organization</button>
+            </form>
+        </div>
+    </div>
+    <div class="col-lg-7">
+        <div class="card">
+            <div class="table-responsive">
+                <table class="table mb-0">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Email</th>
+                            <th>Status</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for o in orgs %}
+                        <tr>
+                            <td>
+                                {% if o.logo_filename %}
+                                <img src="{{ url_for('static', filename=o.logo_filename) }}" style="height:24px" class="me-1">
+                                {% endif %}
+                                {{ o.name }}
+                            </td>
+                            <td>{{ o.contact_email or '—' }}</td>
+                            <td>
+                                {% if o.is_active %}
+                                <span class="badge bg-success">Active</span>
+                                {% else %}
+                                <span class="badge bg-secondary">Inactive</span>
+                                {% endif %}
+                            </td>
+                            <td class="text-end">
+                                <a href="{{ url_for('admin_org_detail', org_id=o.id) }}" class="btn btn-sm btn-outline-primary">Manage</a>
+                                {% if o.is_active %}
+                                <form method="POST" class="d-inline" onsubmit="return confirm('Deactivate?')">
+                                    <input type="hidden" name="action" value="deactivate">
+                                    <input type="hidden" name="org_id" value="{{ o.id }}">
+                                    <button class="btn btn-sm btn-outline-danger">Deactivate</button>
+                                </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

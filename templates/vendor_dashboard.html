@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Vendor Dashboard{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h3 class="mb-0">Welcome, {{ vendor.name }}</h3>
+        <small class="text-muted">{{ org.name }}</small>
+    </div>
+    <a href="{{ url_for('vendor_quotation') }}" class="btn btn-primary">
+        <i class="bi bi-plus-circle"></i> Submit New Quotation
+    </a>
+</div>
+
+<div class="card">
+    <div class="card-header bg-white">
+        <h5 class="mb-0">My Quotations</h5>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-hover mb-0">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Service</th>
+                    <th>Amount (₦)</th>
+                    <th>Tax</th>
+                    <th>Status</th>
+                    <th>Submitted</th>
+                    <th>Docs</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for q in quotations %}
+                <tr>
+                    <td>{{ q.id }}</td>
+                    <td>{{ q.service_title or q.service_name or '—' }}</td>
+                    <td>{{ "{:,.2f}".format(q.total_amount or 0) }}</td>
+                    <td>{{ q.tax_rate or 0 }}%</td>
+                    <td>
+                        <span class="badge bg-{{ 'success' if q.status=='submitted' else 'secondary' }}">
+                            {{ q.status }}
+                        </span>
+                    </td>
+                    <td>{{ q.submitted_at[:16] if q.submitted_at else '—' }}</td>
+                    <td>
+                        {% if q.invoice_filename %}
+                        <a href="{{ url_for('download_file', filename=q.invoice_filename) }}" class="btn btn-sm btn-outline-primary">Invoice</a>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7" class="text-center text-muted py-4">No quotations yet. Click "Submit New Quotation" to start.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card mt-4">
+    <div class="card-header bg-white"><h5 class="mb-0">Registration Profile</h5></div>
+    <div class="card-body">
+        <div class="row">
+            <div class="col-md-6"><strong>Email:</strong> {{ vendor.email }}</div>
+            <div class="col-md-6"><strong>Phone:</strong> {{ vendor.phone or '—' }}</div>
+            <div class="col-md-6"><strong>CAC:</strong> {{ vendor.cac_no or '—' }}</div>
+            <div class="col-md-6"><strong>TIN:</strong> {{ vendor.tin or '—' }}</div>
+            <div class="col-md-6"><strong>Bank:</strong> {{ vendor.bank_name or '—' }}</div>
+            <div class="col-md-6"><strong>Service Type:</strong> {{ vendor.service_type or '—' }}</div>
+            <div class="col-12 mt-2"><strong>Address:</strong> {{ vendor.official_address or '—' }}</div>
+        </div>
+    </div>
+</div>
+{% endblock %}

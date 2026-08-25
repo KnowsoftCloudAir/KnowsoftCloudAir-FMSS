@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}Submit Quotation{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-10">
+        <div class="card p-4 mb-3">
+            <h4>Vendor Details (from registration)</h4>
+            <div class="row small">
+                <div class="col-md-4"><strong>Name:</strong> {{ vendor.name }}</div>
+                <div class="col-md-4"><strong>Email:</strong> {{ vendor.email }}</div>
+                <div class="col-md-4"><strong>CAC:</strong> {{ vendor.cac_no or '—' }}</div>
+                <div class="col-md-4"><strong>TIN:</strong> {{ vendor.tin or '—' }}</div>
+                <div class="col-md-4"><strong>Bank:</strong> {{ vendor.bank_name or '—' }}</div>
+                <div class="col-md-4"><strong>Phone:</strong> {{ vendor.phone or '—' }}</div>
+            </div>
+        </div>
+
+        <div class="card p-4">
+            <h3 class="mb-3">Procurement Quotation Form</h3>
+            <p class="text-muted">Recipient: <strong>{{ org.name }}</strong></p>
+            <form method="POST" enctype="multipart/form-data" id="quoteForm">
+                <div class="row g-3">
+                    <div class="col-md-12">
+                        <label class="form-label required">Select Procurement Service</label>
+                        <select name="service_id" class="form-select" required>
+                            <option value="">-- Choose Service --</option>
+                            {% for s in services %}
+                            <option value="{{ s.id }}">{{ s.title }} {% if s.deadline %}(Deadline: {{ s.deadline }}){% endif %}</option>
+                            {% endfor %}
+                        </select>
+                        {% if not services %}
+                        <div class="form-text text-warning">No active services. Contact the organization admin.</div>
+                        {% endif %}
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label required">Price per Unit (₦)</label>
+                        <input type="number" name="unit_price" id="unit_price" class="form-control" step="0.01" min="0" required>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label required">Quantity</label>
+                        <input type="number" name="quantity" id="quantity" class="form-control" step="0.01" min="0" required>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Tax Rate (%)</label>
+                        <select name="tax_rate" id="tax_rate" class="form-select">
+                            {% for t in range(0, 101) %}
+                            <option value="{{ t }}" {% if t==7.5 %}selected{% endif %}>{{ t }}%</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-12">
+                        <div class="alert alert-light border">
+                            <strong>Subtotal:</strong> ₦<span id="subtotal">0.00</span> &nbsp;|&nbsp;
+                            <strong>Tax:</strong> ₦<span id="tax_amount">0.00</span> &nbsp;|&nbsp;
+                            <strong>Total:</strong> ₦<span id="total">0.00</span>
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label">Quality / Specification</label>
+                        <textarea name="quality_spec" class="form-control" rows="2" placeholder="Describe quality standards, brands, standards compliance..."></textarea>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label">Other Relevant Details</label>
+                        <textarea name="other_details" class="form-control" rows="2" placeholder="Delivery timeline, warranty, payment terms, etc."></textarea>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Upload Quotation / Invoice (PDF)</label>
+                        <input type="file" name="invoice" class="form-control" accept=".pdf,.png,.jpg,.jpeg">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Delivery Note (optional on first submit)</label>
+                        <input type="file" name="delivery_note" class="form-control" accept=".pdf,.png,.jpg,.jpeg">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Receipt (optional on first submit)</label>
+                        <input type="file" name="receipt" class="form-control" accept=".pdf,.png,.jpg,.jpeg">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Acceptance of Offer</label>
+                        <select name="acceptance_status" class="form-select">
+                            <option value="accepted">I accept to provide this service</option>
+                            <option value="rejected">I decline this opportunity</option>
+                        </select>
+                    </div>
+                    <div class="col-12">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="consent" id="consent" value="1" required>
+                            <label class="form-check-label" for="consent">
+                                I consent and confirm that I am ready to comply with the terms and conditions of delivering the service/goods and of payment.
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-4">
+                    <button type="submit" class="btn btn-primary btn-lg" {% if not services %}disabled{% endif %}>
+                        <i class="bi bi-send"></i> Submit Quotation
+                    </button>
+                    <a href="{{ url_for('vendor_dashboard') }}" class="btn btn-outline-secondary">Cancel</a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script>
+function recalc() {
+    const up = parseFloat(document.getElementById('unit_price').value) || 0;
+    const qty = parseFloat(document.getElementById('quantity').value) || 0;
+    const tax = parseFloat(document.getElementById('tax_rate').value) || 0;
+    const sub = up * qty;
+    const taxAmt = sub * (tax / 100);
+    const total = sub + taxAmt;
+    document.getElementById('subtotal').textContent = sub.toLocaleString('en-NG', {minimumFractionDigits:2});
+    document.getElementById('tax_amount').textContent = taxAmt.toLocaleString('en-NG', {minimumFractionDigits:2});
+    document.getElementById('total').textContent = total.toLocaleString('en-NG', {minimumFractionDigits:2});
+}
+['unit_price','quantity','tax_rate'].forEach(id => {
+    document.getElementById(id).addEventListener('input', recalc);
+    document.getElementById(id).addEventListener('change', recalc);
+});
+</script>
+{% endblock %}

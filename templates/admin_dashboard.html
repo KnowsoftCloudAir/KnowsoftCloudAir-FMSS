@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Admin Dashboard{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2 class="mb-0">Admin Dashboard</h2>
+    <div>
+        <a href="{{ url_for('admin_organizations') }}" class="btn btn-outline-primary me-2">
+            <i class="bi bi-building"></i> Organizations
+        </a>
+        <a href="{{ url_for('admin_change_password') }}" class="btn btn-outline-secondary btn-sm">Change Password</a>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <h3>{{ orgs|length }}</h3>
+            <div class="text-muted">Organizations</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <h3>{{ total_vendors }}</h3>
+            <div class="text-muted">Vendors</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <h3>{{ total_services }}</h3>
+            <div class="text-muted">Active Services</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card stat-card">
+            <h3>{{ total_quotes }}</h3>
+            <div class="text-muted">Quotations</div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-7">
+        <div class="card">
+            <div class="card-header bg-white d-flex justify-content-between">
+                <h5 class="mb-0">Recent Quotations</h5>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-sm mb-0">
+                    <thead>
+                        <tr>
+                            <th>Vendor</th>
+                            <th>Org</th>
+                            <th>Service</th>
+                            <th>Amount</th>
+                            <th>Date</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for r in recent %}
+                        <tr>
+                            <td>{{ r.vendor_name }}</td>
+                            <td>{{ r.org_name[:20] }}</td>
+                            <td>{{ (r.service_title or '—')[:25] }}</td>
+                            <td>₦{{ "{:,.0f}".format(r.total_amount or 0) }}</td>
+                            <td>{{ r.submitted_at[:10] if r.submitted_at else '—' }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="5" class="text-center text-muted">No quotations yet</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-5">
+        <div class="card">
+            <div class="card-header bg-white"><h5 class="mb-0">Top Rankings (Overall)</h5></div>
+            <ul class="list-group list-group-flush">
+                {% for r in rankings %}
+                <li class="list-group-item d-flex justify-content-between">
+                    <span>{{ loop.index }}. {{ r.vendor_name or r.name }}</span>
+                    <span class="badge bg-primary">{{ r.final_score }}</span>
+                </li>
+                {% else %}
+                <li class="list-group-item text-muted">No ranked quotations</li>
+                {% endfor %}
+            </ul>
+        </div>
+        <div class="card mt-3">
+            <div class="card-header bg-white"><h5 class="mb-0">Organizations</h5></div>
+            <ul class="list-group list-group-flush">
+                {% for o in orgs %}
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                    <a href="{{ url_for('admin_org_detail', org_id=o.id) }}">{{ o.name }}</a>
+                    <a href="{{ url_for('admin_org_detail', org_id=o.id) }}" class="btn btn-sm btn-outline-primary">Manage</a>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}

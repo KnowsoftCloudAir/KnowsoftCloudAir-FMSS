@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Vendor Login – {{ org.name }}{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-5">
+        <div class="card p-4">
+            <h3 class="text-center mb-1">Vendor Login</h3>
+            <p class="text-muted text-center">{{ org.name }}</p>
+            <form method="POST">
+                <div class="mb-3">
+                    <label class="form-label">Email</label>
+                    <input type="email" name="email" class="form-control form-control-lg" required autofocus>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Password</label>
+                    <input type="password" name="password" class="form-control form-control-lg" required>
+                </div>
+                <div class="d-grid">
+                    <button type="submit" class="btn btn-primary btn-lg">Login</button>
+                </div>
+            </form>
+            <p class="text-center mt-3 mb-0">
+                New vendor? <a href="{{ url_for('vendor_register') }}">Register here</a>
+            </p>
+        </div>
+    </div>
+</div>
+{% endblock %}
