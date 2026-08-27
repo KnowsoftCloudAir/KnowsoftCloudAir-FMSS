@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% block title %}Sub-Admin Management{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2 class="mb-0"><i class="bi bi-people"></i> Sub-Admin & Client Assignments</h2>
+    <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-secondary">Back to Dashboard</a>
+</div>
+
+<div class="row g-4">
+    <!-- Create Sub-Admin -->
+    <div class="col-lg-5">
+        <div class="card">
+            <div class="card-header bg-white"><h5 class="mb-0">Create Sub-Admin</h5></div>
+            <div class="card-body">
+                <form method="POST">
+                    <input type="hidden" name="action" value="create_sub">
+                    <div class="mb-3">
+                        <label class="form-label required">Username</label>
+                        <input type="text" name="username" class="form-control" required placeholder="e.g. org_manager1">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Full Name</label>
+                        <input type="text" name="full_name" class="form-control" placeholder="Optional display name">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label required">Temporary Password</label>
+                        <input type="password" name="password" class="form-control" required minlength="6">
+                        <div class="form-text">They will be forced to change it on first login.</div>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Create Sub-Admin</button>
+                </form>
+            </div>
+        </div>
+
+        <div class="card mt-4">
+            <div class="card-header bg-white"><h5 class="mb-0">Assign Client to Sub-Admin</h5></div>
+            <div class="card-body">
+                <form method="POST">
+                    <input type="hidden" name="action" value="assign_org">
+                    <div class="mb-3">
+                        <label class="form-label required">Sub-Admin</label>
+                        <select name="admin_id" class="form-select" required>
+                            <option value="">— Select —</option>
+                            {% for s in sub_admins %}
+                            {% if s.is_active %}
+                            <option value="{{ s.id }}">{{ s.username }}{% if s.full_name %} ({{ s.full_name }}){% endif %}</option>
+                            {% endif %}
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label required">Organization (Client)</label>
+                        <select name="organization_id" class="form-select" required>
+                            <option value="">— Select —</option>
+                            {% for o in orgs %}
+                            <option value="{{ o.id }}">{{ o.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <button type="submit" class="btn btn-success">Assign Exclusive Management</button>
+                </form>
+                <p class="text-muted small mt-2 mb-0">
+                    The sub-admin will have full rights only for the assigned client(s).
+                    You can deactivate the assignment at any time.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Lists -->
+    <div class="col-lg-7">
+        <div class="card">
+            <div class="card-header bg-white"><h5 class="mb-0">Sub-Admins</h5></div>
+            <div class="table-responsive">
+                <table class="table table-sm mb-0">
+                    <thead>
+                        <tr>
+                            <th>Username</th>
+                            <th>Name</th>
+                            <th>Status</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for s in sub_admins %}
+                        <tr>
+                            <td>{{ s.username }}</td>
+                            <td>{{ s.full_name or '—' }}</td>
+                            <td>
+                                {% if s.is_active %}
+                                <span class="badge bg-success">Active</span>
+                                {% else %}
+                                <span class="badge bg-secondary">Inactive</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if s.is_active %}
+                                <form method="POST" class="d-inline" onsubmit="return confirm('Deactivate this sub-admin and revoke all assignments?');">
+                                    <input type="hidden" name="action" value="deactivate_sub">
+                                    <input type="hidden" name="admin_id" value="{{ s.id }}">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger">Deactivate</button>
+                                </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="4" class="text-center text-muted">No sub-admins yet.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card mt-4">
+            <div class="card-header bg-white"><h5 class="mb-0">Current Assignments</h5></div>
+            <div class="table-responsive">
+                <table class="table table-sm mb-0">
+                    <thead>
+                        <tr>
+                            <th>Sub-Admin</th>
+                            <th>Client (Org)</th>
+                            <th>Status</th>
+                            <th>Assigned</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for a in assignments %}
+                        <tr>
+                            <td>{{ a.username }}{% if a.full_name %} <small class="text-muted">({{ a.full_name }})</small>{% endif %}</td>
+                            <td>{{ a.org_name }}</td>
+                            <td>
+                                {% if a.is_active %}
+                                <span class="badge bg-success">Active</span>
+                                {% else %}
+                                <span class="badge bg-secondary">Deactivated</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ (a.assigned_at or '')[:10] }}</td>
+                            <td>
+                                {% if a.is_active %}
+                                <form method="POST" class="d-inline" onsubmit="return confirm('Deactivate this assignment?');">
+                                    <input type="hidden" name="action" value="deactivate_assignment">
+                                    <input type="hidden" name="assignment_id" value="{{ a.id }}">
+                                    <button type="submit" class="btn btn-sm btn-outline-warning">Deactivate Right</button>
+                                </form>
+                                {% else %}
+                                <small class="text-muted">{{ (a.deactivated_at or '')[:10] }}</small>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="5" class="text-center text-muted">No assignments yet.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

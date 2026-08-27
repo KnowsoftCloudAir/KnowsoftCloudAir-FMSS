@@ -82,8 +82,19 @@ def init_db():
             address TEXT, contact_email TEXT, contact_phone TEXT, description TEXT,
             is_active INTEGER DEFAULT 1, created_at TEXT)""",
         """CREATE TABLE IF NOT EXISTS admin_users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE DEFAULT 'admin',
-            password_hash TEXT NOT NULL, must_change_password INTEGER DEFAULT 1, created_at TEXT)""",
+            id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL, role TEXT DEFAULT 'super',
+            full_name TEXT, is_active INTEGER DEFAULT 1,
+            must_change_password INTEGER DEFAULT 1, created_at TEXT)""",
+        """CREATE TABLE IF NOT EXISTS admin_org_assignments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            admin_id INTEGER NOT NULL,
+            organization_id INTEGER NOT NULL,
+            is_active INTEGER DEFAULT 1,
+            assigned_by INTEGER,
+            assigned_at TEXT,
+            deactivated_at TEXT,
+            UNIQUE(admin_id, organization_id))""",
         """CREATE TABLE IF NOT EXISTS vendors (
             id INTEGER PRIMARY KEY AUTOINCREMENT, organization_id INTEGER NOT NULL, name TEXT NOT NULL,
             cac_no TEXT, state_registration TEXT, tax_clearance TEXT, tin TEXT, bank_name TEXT,
@@ -129,7 +140,9 @@ def init_db():
         admin_row = conn.execute("SELECT * FROM admin_users WHERE username='admin'").fetchone()
         if not admin_row:
             conn.execute(
-                "INSERT INTO admin_users (username, password_hash, must_change_password, created_at) VALUES (?, ?, 1, ?)",
+                """INSERT INTO admin_users
+                   (username, password_hash, role, full_name, is_active, must_change_password, created_at)
+                   VALUES (?, ?, 'super', 'General Administrator', 1, 1, ?)""",
                 ("admin", generate_password_hash(DEFAULT_ADMIN_PASSWORD), datetime.now().isoformat()),
             )
             conn.commit()
@@ -138,10 +151,16 @@ def init_db():
             # Fixes stale hash from a committed procurement.db across deploys.
             if admin_row["must_change_password"]:
                 conn.execute(
-                    "UPDATE admin_users SET password_hash=? WHERE username='admin'",
+                    "UPDATE admin_users SET password_hash=?, role=COALESCE(role, 'super') WHERE username='admin'",
                     (generate_password_hash(DEFAULT_ADMIN_PASSWORD),),
                 )
                 conn.commit()
+            # Ensure role column has a value on older rows
+            try:
+                conn.execute("UPDATE admin_users SET role='super' WHERE role IS NULL OR role=''")
+                conn.commit()
+            except Exception:
+                pass
         if conn.execute("SELECT COUNT(*) FROM organizations").fetchone()[0] == 0:
             conn.execute(
                 """INSERT INTO organizations (name, address, contact_email, description, created_at)
@@ -178,7 +197,7 @@ init_db()
 
 
 def ensure_extra_columns():
-    """Add award / progress columns on existing databases."""
+    """Add award / progress / admin-role columns on existing databases."""
     alters = [
         "ALTER TABLE services ADD COLUMN procurement_stage TEXT DEFAULT 'open'",
         "ALTER TABLE services ADD COLUMN progress_percent REAL DEFAULT 0",
@@ -191,12 +210,30 @@ def ensure_extra_columns():
         "ALTER TABLE procurement_records ADD COLUMN service_id INTEGER",
         "ALTER TABLE procurement_records ADD COLUMN progress_percent REAL DEFAULT 0",
         "ALTER TABLE procurement_records ADD COLUMN stage TEXT DEFAULT 'quotes_received'",
+        "ALTER TABLE admin_users ADD COLUMN role TEXT DEFAULT 'super'",
+        "ALTER TABLE admin_users ADD COLUMN full_name TEXT",
+        "ALTER TABLE admin_users ADD COLUMN is_active INTEGER DEFAULT 1",
     ]
     for sql in alters:
         try:
             _exec_sql(sql)
         except Exception:
             pass
+    # Ensure assignments table exists (for upgrades)
+    try:
+        _exec_sql(
+            """CREATE TABLE IF NOT EXISTS admin_org_assignments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id INTEGER NOT NULL,
+                organization_id INTEGER NOT NULL,
+                is_active INTEGER DEFAULT 1,
+                assigned_by INTEGER,
+                assigned_at TEXT,
+                deactivated_at TEXT,
+                UNIQUE(admin_id, organization_id))"""
+        )
+    except Exception:
+        pass
 
 
 ensure_extra_columns()
@@ -258,6 +295,34 @@ def compute_service_stage(service_id):
         return "under_review", STAGE_META["under_review"]["percent"], None
     return "quotes_received", STAGE_META["quotes_received"]["percent"], None
 
+from datetime import datetime
+from io import BytesIO
+import pandas as pd
+from flask import render_template, request, redirect, url_for, flash, send_file, session
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib import colors
+from reportlab.lib.units import inch
+
+
+def get_quarter_date_range(year: int, quarter: int):
+    """Return (start_iso, end_iso) for a calendar quarter."""
+    if quarter == 1:
+        start = f"{year}-01-01T00:00:00"
+        end = f"{year}-03-31T23:59:59"
+    elif quarter == 2:
+        start = f"{year}-04-01T00:00:00"
+        end = f"{year}-06-30T23:59:59"
+    elif quarter == 3:
+        start = f"{year}-07-01T00:00:00"
+        end = f"{year}-09-30T23:59:59"
+    else:
+        start = f"{year}-10-01T00:00:00"
+        end = f"{year}-12-31T23:59:59"
+    return start, end
+
+
 
 # ---------------------------------------------------------
 # HELPERS
@@ -283,6 +348,9 @@ def login_required(role=None):
             if role == "admin" and not session.get("admin"):
                 flash("Please login as Admin.", "warning")
                 return redirect(url_for("admin_login"))
+            if role == "super_admin" and (not session.get("admin") or session.get("admin_role") != "super"):
+                flash("Only the general administrator can access this.", "danger")
+                return redirect(url_for("admin_dashboard"))
             if role == "vendor" and not session.get("vendor_id"):
                 flash("Please login as Vendor.", "warning")
                 return redirect(url_for("vendor_login"))
@@ -292,6 +360,48 @@ def login_required(role=None):
             return f(*args, **kwargs)
         return wrapped
     return decorator
+
+
+def is_super_admin():
+    return session.get("admin") and session.get("admin_role") == "super"
+
+
+def get_admin_assigned_org_ids():
+    """Return list of organization IDs the current admin may manage.
+    Super admin → all active orgs. Sub-admin → only active assignments.
+    """
+    if not session.get("admin"):
+        return []
+    conn = get_db()
+    if is_super_admin():
+        rows = conn.execute("SELECT id FROM organizations WHERE is_active=1").fetchall()
+        conn.close()
+        return [r["id"] for r in rows]
+    admin_id = session.get("admin_id")
+    rows = conn.execute(
+        """SELECT organization_id FROM admin_org_assignments
+           WHERE admin_id=? AND is_active=1""",
+        (admin_id,),
+    ).fetchall()
+    conn.close()
+    return [r["organization_id"] for r in rows]
+
+
+def can_manage_org(org_id):
+    """True if current admin may manage the given organization."""
+    if not session.get("admin"):
+        return False
+    if is_super_admin():
+        return True
+    return int(org_id) in get_admin_assigned_org_ids()
+
+
+def require_org_access(org_id):
+    """Flash + redirect helper when sub-admin tries to touch an unassigned org."""
+    if not can_manage_org(org_id):
+        flash("You do not have permission to manage this organization.", "danger")
+        return False
+    return True
 
 
 def send_email_simulation(to_email, subject, body):
@@ -572,10 +682,36 @@ def vendor_accept_offer(quotation_id):
         (action, datetime.now().isoformat(), quotation_id),
     )
     if action == "accepted" and q["service_id"]:
+        # Mark all other quotations for this service as "not awarded"
+        conn.execute(
+            """UPDATE quotations
+               SET award_status='not_awarded', status='not_awarded'
+               WHERE service_id=? AND id!=? AND (award_status IS NULL OR award_status IN ('none', 'pending'))""",
+            (q["service_id"], quotation_id),
+        )
         conn.execute(
             "UPDATE services SET procurement_stage=?, progress_percent=? WHERE id=?",
             ("in_progress", STAGE_META["in_progress"]["percent"], q["service_id"]),
         )
+        # Optional: notify other vendors that they were not selected
+        others = conn.execute(
+            """SELECT v.email, v.name, q.service_title
+               FROM quotations q
+               JOIN vendors v ON q.vendor_id = v.id
+               WHERE q.service_id=? AND q.id!=?""",
+            (q["service_id"], quotation_id),
+        ).fetchall()
+        for o in others:
+            send_email_simulation(
+                o["email"],
+                f"Quotation Outcome – {o['service_title'] or 'Service'}",
+                f"Dear {o['name']},\n\n"
+                f"Thank you for submitting a quotation for: {o['service_title'] or 'the service'}.\n"
+                f"After evaluation, another vendor has been selected and has accepted the offer.\n"
+                f"Your quotation status is now: Not Awarded.\n\n"
+                f"We appreciate your interest and look forward to future opportunities.\n\n"
+                f"Regards,\nKnowsoft eProcurement",
+            )
     elif action == "declined" and q["service_id"]:
         conn.execute(
             "UPDATE services SET procurement_stage=?, progress_percent=? WHERE id=?",
@@ -584,7 +720,7 @@ def vendor_accept_offer(quotation_id):
     conn.commit()
     conn.close()
     flash(
-        "You have accepted the offer. Service is now in progress."
+        "You have accepted the offer. Service is now in progress. Other vendors have been marked as Not Awarded."
         if action == "accepted"
         else "You have declined the offer. The organization has been notified.",
         "success" if action == "accepted" else "warning",
@@ -733,17 +869,22 @@ def vendor_quotation():
 @app.route("/admin/login", methods=["GET", "POST"])
 def admin_login():
     if request.method == "POST":
+        username = request.form.get("username", "admin").strip() or "admin"
         password = request.form.get("password", "")
         conn = get_db()
-        admin = conn.execute("SELECT * FROM admin_users WHERE username='admin'").fetchone()
+        admin = conn.execute(
+            "SELECT * FROM admin_users WHERE username=? AND (is_active=1 OR is_active IS NULL)",
+            (username,),
+        ).fetchone()
         ok = False
         if admin and check_password_hash(admin["password_hash"], password):
             ok = True
-        elif password == DEFAULT_ADMIN_PASSWORD:
-            # Recover from mismatched hash in committed DB
+        elif username == "admin" and password == DEFAULT_ADMIN_PASSWORD:
+            # Recover from mismatched hash in committed DB (super admin only)
             conn.execute(
-                "INSERT OR REPLACE INTO admin_users (id, username, password_hash, must_change_password, created_at) "
-                "VALUES (1, 'admin', ?, 1, ?)",
+                """INSERT OR REPLACE INTO admin_users
+                   (id, username, password_hash, role, full_name, is_active, must_change_password, created_at)
+                   VALUES (1, 'admin', ?, 'super', 'General Administrator', 1, 1, ?)""",
                 (generate_password_hash(DEFAULT_ADMIN_PASSWORD), datetime.now().isoformat()),
             )
             conn.commit()
@@ -751,13 +892,17 @@ def admin_login():
             ok = True
         conn.close()
         if ok and admin:
+            role = admin["role"] if "role" in admin.keys() and admin["role"] else "super"
             session["admin"] = True
+            session["admin_id"] = admin["id"]
+            session["admin_username"] = admin["username"]
+            session["admin_role"] = role
             session["admin_must_change"] = bool(admin["must_change_password"])
             if admin["must_change_password"]:
                 flash("Please change the default password.", "warning")
                 return redirect(url_for("admin_change_password"), code=303)
             return redirect(url_for("admin_dashboard"), code=303)
-        flash("Wrong password.", "danger")
+        flash("Invalid username or password.", "danger")
     return render_template("admin_login.html")
 
 
@@ -773,10 +918,17 @@ def admin_change_password():
             flash("Passwords do not match.", "danger")
         else:
             conn = get_db()
-            conn.execute(
-                "UPDATE admin_users SET password_hash=?, must_change_password=0 WHERE username='admin'",
-                (generate_password_hash(new_pass),),
-            )
+            admin_id = session.get("admin_id")
+            if admin_id:
+                conn.execute(
+                    "UPDATE admin_users SET password_hash=?, must_change_password=0 WHERE id=?",
+                    (generate_password_hash(new_pass), admin_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE admin_users SET password_hash=?, must_change_password=0 WHERE username=?",
+                    (generate_password_hash(new_pass), session.get("admin_username", "admin")),
+                )
             conn.commit()
             conn.close()
             session["admin_must_change"] = False
@@ -787,28 +939,175 @@ def admin_change_password():
 
 @app.route("/admin/logout")
 def admin_logout():
-    session.pop("admin", None)
-    session.pop("admin_must_change", None)
+    for k in ("admin", "admin_id", "admin_username", "admin_role", "admin_must_change"):
+        session.pop(k, None)
     return redirect(url_for("index"))
+
+
+# ---------------------------------------------------------
+# SUPER-ADMIN: Sub-admin management & org assignments
+# ---------------------------------------------------------
+@app.route("/admin/sub_admins", methods=["GET", "POST"])
+@login_required("super_admin")
+def admin_sub_admins():
+    """General admin creates sub-admins and assigns/deactivates client (org) management rights."""
+    conn = get_db()
+    if request.method == "POST":
+        action = request.form.get("action")
+        if action == "create_sub":
+            username = request.form.get("username", "").strip().lower()
+            full_name = request.form.get("full_name", "").strip()
+            password = request.form.get("password", "")
+            if not username or not password or len(password) < 6:
+                flash("Username and password (min 6 chars) are required.", "danger")
+            else:
+                existing = conn.execute(
+                    "SELECT id FROM admin_users WHERE username=?", (username,)
+                ).fetchone()
+                if existing:
+                    flash("Username already exists.", "danger")
+                else:
+                    conn.execute(
+                        """INSERT INTO admin_users
+                           (username, password_hash, role, full_name, is_active, must_change_password, created_at)
+                           VALUES (?, ?, 'sub', ?, 1, 1, ?)""",
+                        (
+                            username,
+                            generate_password_hash(password),
+                            full_name or username,
+                            datetime.now().isoformat(),
+                        ),
+                    )
+                    conn.commit()
+                    flash(f"Sub-admin '{username}' created. They must change password on first login.", "success")
+        elif action == "assign_org":
+            admin_id = request.form.get("admin_id")
+            org_id = request.form.get("organization_id")
+            if admin_id and org_id:
+                existing = conn.execute(
+                    "SELECT id, is_active FROM admin_org_assignments WHERE admin_id=? AND organization_id=?",
+                    (admin_id, org_id),
+                ).fetchone()
+                if existing:
+                    conn.execute(
+                        """UPDATE admin_org_assignments
+                           SET is_active=1, assigned_by=?, assigned_at=?, deactivated_at=NULL
+                           WHERE id=?""",
+                        (session.get("admin_id"), datetime.now().isoformat(), existing["id"]),
+                    )
+                else:
+                    conn.execute(
+                        """INSERT INTO admin_org_assignments
+                           (admin_id, organization_id, is_active, assigned_by, assigned_at)
+                           VALUES (?, ?, 1, ?, ?)""",
+                        (admin_id, org_id, session.get("admin_id"), datetime.now().isoformat()),
+                    )
+                conn.commit()
+                flash("Organization assigned to sub-admin.", "success")
+        elif action == "deactivate_assignment":
+            assignment_id = request.form.get("assignment_id")
+            if assignment_id:
+                conn.execute(
+                    """UPDATE admin_org_assignments
+                       SET is_active=0, deactivated_at=? WHERE id=?""",
+                    (datetime.now().isoformat(), assignment_id),
+                )
+                conn.commit()
+                flash("Assignment deactivated. Sub-admin no longer manages that client.", "info")
+        elif action == "deactivate_sub":
+            admin_id = request.form.get("admin_id")
+            if admin_id and int(admin_id) != session.get("admin_id"):
+                conn.execute(
+                    "UPDATE admin_users SET is_active=0 WHERE id=? AND role='sub'",
+                    (admin_id,),
+                )
+                conn.execute(
+                    """UPDATE admin_org_assignments SET is_active=0, deactivated_at=?
+                       WHERE admin_id=?""",
+                    (datetime.now().isoformat(), admin_id),
+                )
+                conn.commit()
+                flash("Sub-admin deactivated and all assignments revoked.", "info")
+        return redirect(url_for("admin_sub_admins"), code=303)
+
+    sub_admins = conn.execute(
+        "SELECT * FROM admin_users WHERE role='sub' ORDER BY username"
+    ).fetchall()
+    orgs = conn.execute(
+        "SELECT id, name FROM organizations WHERE is_active=1 ORDER BY name"
+    ).fetchall()
+    assignments = conn.execute(
+        """SELECT a.*, u.username, u.full_name, o.name as org_name
+           FROM admin_org_assignments a
+           JOIN admin_users u ON a.admin_id = u.id
+           JOIN organizations o ON a.organization_id = o.id
+           ORDER BY u.username, o.name"""
+    ).fetchall()
+    conn.close()
+    return render_template(
+        "admin_sub_admins.html",
+        sub_admins=sub_admins,
+        orgs=orgs,
+        assignments=assignments,
+    )
 
 
 @app.route("/admin")
 @login_required("admin")
 def admin_dashboard():
     conn = get_db()
-    orgs = conn.execute("SELECT * FROM organizations WHERE is_active=1").fetchall()
-    total_vendors = conn.execute("SELECT COUNT(*) FROM vendors").fetchone()[0]
-    total_quotes = conn.execute("SELECT COUNT(*) FROM quotations").fetchone()[0]
-    total_services = conn.execute("SELECT COUNT(*) FROM services WHERE is_active=1").fetchone()[0]
-    recent = conn.execute(
-        """SELECT q.*, v.name as vendor_name, o.name as org_name
-           FROM quotations q
-           JOIN vendors v ON q.vendor_id=v.id
-           JOIN organizations o ON q.organization_id=o.id
-           ORDER BY q.submitted_at DESC LIMIT 10"""
-    ).fetchall()
+    allowed_orgs = get_admin_assigned_org_ids()
+    if is_super_admin():
+        orgs = conn.execute("SELECT * FROM organizations WHERE is_active=1").fetchall()
+        total_vendors = conn.execute("SELECT COUNT(*) FROM vendors").fetchone()[0]
+        total_quotes = conn.execute("SELECT COUNT(*) FROM quotations").fetchone()[0]
+        total_services = conn.execute("SELECT COUNT(*) FROM services WHERE is_active=1").fetchone()[0]
+        recent = conn.execute(
+            """SELECT q.*, v.name as vendor_name, o.name as org_name
+               FROM quotations q
+               JOIN vendors v ON q.vendor_id=v.id
+               JOIN organizations o ON q.organization_id=o.id
+               ORDER BY q.submitted_at DESC LIMIT 10"""
+        ).fetchall()
+        rankings = get_final_rankings()
+    else:
+        if not allowed_orgs:
+            orgs = []
+            total_vendors = total_quotes = total_services = 0
+            recent = []
+            rankings = []
+        else:
+            placeholders = ",".join("?" * len(allowed_orgs))
+            orgs = conn.execute(
+                f"SELECT * FROM organizations WHERE is_active=1 AND id IN ({placeholders})",
+                allowed_orgs,
+            ).fetchall()
+            total_vendors = conn.execute(
+                f"SELECT COUNT(*) FROM vendors WHERE organization_id IN ({placeholders})",
+                allowed_orgs,
+            ).fetchone()[0]
+            total_quotes = conn.execute(
+                f"SELECT COUNT(*) FROM quotations WHERE organization_id IN ({placeholders})",
+                allowed_orgs,
+            ).fetchone()[0]
+            total_services = conn.execute(
+                f"SELECT COUNT(*) FROM services WHERE is_active=1 AND organization_id IN ({placeholders})",
+                allowed_orgs,
+            ).fetchone()[0]
+            recent = conn.execute(
+                f"""SELECT q.*, v.name as vendor_name, o.name as org_name
+                    FROM quotations q
+                    JOIN vendors v ON q.vendor_id=v.id
+                    JOIN organizations o ON q.organization_id=o.id
+                    WHERE q.organization_id IN ({placeholders})
+                    ORDER BY q.submitted_at DESC LIMIT 10""",
+                allowed_orgs,
+            ).fetchall()
+            rankings = []
+            for oid in allowed_orgs:
+                rankings.extend(get_final_rankings(organization_id=oid))
+            rankings.sort(key=lambda x: x["final_score"], reverse=True)
     conn.close()
-    rankings = get_final_rankings()
     return render_template(
         "admin_dashboard.html",
         orgs=orgs,
@@ -817,14 +1116,103 @@ def admin_dashboard():
         total_services=total_services,
         recent=recent,
         rankings=rankings[:5],
+        is_super=is_super_admin(),
+        admin_role=session.get("admin_role", "super"),
+        admin_username=session.get("admin_username", "admin"),
     )
+
+def get_quarterly_completed(organization_id=None, year=None, quarter=None):
+    """
+    Return list of completed / awarded procurements for the given filters.
+    Includes: service title, vendor, scores, amount, award date, status.
+    """
+    conn = get_db()
+    sql = """
+        SELECT
+            q.id AS quotation_id,
+            q.service_id,
+            q.service_title,
+            q.total_amount,
+            q.system_score,
+            q.award_status,
+            q.awarded_at,
+            q.submitted_at,
+            q.lpo_available,
+            v.id AS vendor_id,
+            v.name AS vendor_name,
+            v.email AS vendor_email,
+            o.id AS organization_id,
+            o.name AS org_name,
+            s.title AS service_name,
+            s.procurement_stage,
+            s.progress_percent
+        FROM quotations q
+        JOIN vendors v ON q.vendor_id = v.id
+        JOIN organizations o ON q.organization_id = o.id
+        LEFT JOIN services s ON q.service_id = s.id
+        WHERE q.award_status = 'awarded'
+    """
+    params = []
+
+    if organization_id:
+        sql += " AND q.organization_id = ?"
+        params.append(organization_id)
+
+    if year and quarter:
+        start, end = get_quarter_date_range(int(year), int(quarter))
+        # Prefer awarded_at; fall back to submitted_at
+        sql += """ AND (
+            (q.awarded_at IS NOT NULL AND q.awarded_at >= ? AND q.awarded_at <= ?)
+            OR (q.awarded_at IS NULL AND q.submitted_at >= ? AND q.submitted_at <= ?)
+        )"""
+        params.extend([start, end, start, end])
+
+    sql += " ORDER BY COALESCE(q.awarded_at, q.submitted_at) DESC"
+
+    rows = conn.execute(sql, params).fetchall()
+
+    result = []
+    for r in rows:
+        r = dict(r)
+        # Committee average
+        scores = conn.execute(
+            "SELECT score FROM committee_scores WHERE quotation_id=?",
+            (r["quotation_id"],)
+        ).fetchall()
+        committee_avg = sum(s["score"] for s in scores) / len(scores) if scores else 0.0
+        system = float(r.get("system_score") or 0)
+        final = (system * 0.4) + (committee_avg * 0.6)
+
+        stage = r.get("procurement_stage") or "vendor_selected"
+        progress = r.get("progress_percent")
+        if progress is None:
+            progress = 100 if stage == "completed" else 60
+
+        result.append({
+            **r,
+            "system_score": round(system, 2),
+            "committee_avg": round(committee_avg, 2),
+            "final_score": round(final, 2),
+            "num_scores": len(scores),
+            "stage_label": STAGE_META.get(stage, {}).get("label", stage),
+            "progress_percent": progress,
+            "award_date": (r.get("awarded_at") or r.get("submitted_at") or "")[:10],
+            "amount": float(r.get("total_amount") or 0),
+            "service_display": r.get("service_name") or r.get("service_title") or "—",
+        })
+    conn.close()
+    return result
 
 
 @app.route("/admin/organizations", methods=["GET", "POST"])
 @login_required("admin")
 def admin_organizations():
+    # Only super admin can create / deactivate organizations
     conn = get_db()
     if request.method == "POST":
+        if not is_super_admin():
+            flash("Only the general administrator can add or deactivate organizations.", "danger")
+            return redirect(url_for("admin_organizations"), code=303)
         action = request.form.get("action")
         if action == "add":
             name = request.form.get("name", "").strip()
@@ -855,14 +1243,31 @@ def admin_organizations():
             conn.execute("UPDATE organizations SET is_active=0 WHERE id=?", (oid,))
             conn.commit()
             flash("Organization deactivated.", "info")
-    orgs = conn.execute("SELECT * FROM organizations ORDER BY name").fetchall()
+    if is_super_admin():
+        orgs = conn.execute("SELECT * FROM organizations ORDER BY name").fetchall()
+    else:
+        allowed = get_admin_assigned_org_ids()
+        if allowed:
+            placeholders = ",".join("?" * len(allowed))
+            orgs = conn.execute(
+                f"SELECT * FROM organizations WHERE id IN ({placeholders}) ORDER BY name",
+                allowed,
+            ).fetchall()
+        else:
+            orgs = []
     conn.close()
-    return render_template("admin_organizations.html", orgs=orgs)
+    return render_template(
+        "admin_organizations.html",
+        orgs=orgs,
+        is_super=is_super_admin(),
+    )
 
 
 @app.route("/admin/org/<int:org_id>")
 @login_required("admin")
 def admin_org_detail(org_id):
+    if not require_org_access(org_id):
+        return redirect(url_for("admin_dashboard"), code=303)
     conn = get_db()
     org = conn.execute("SELECT * FROM organizations WHERE id=?", (org_id,)).fetchone()
     if not org:
@@ -891,35 +1296,321 @@ def admin_org_detail(org_id):
         members=members,
         criteria=criteria,
         rankings=rankings,
+        is_super=is_super_admin(),
+    )
+
+@app.route("/admin/quarterly_report", methods=["GET", "POST"])
+@login_required("admin")
+def admin_quarterly_report():
+    """
+    Quarterly Procurement Report page.
+    Filters: Organization + Year + Quarter.
+    Shows summary table of all awarded/completed procurements.
+    """
+    conn = get_db()
+    allowed = get_admin_assigned_org_ids()
+    if is_super_admin():
+        orgs = conn.execute(
+            "SELECT id, name FROM organizations WHERE is_active=1 ORDER BY name"
+        ).fetchall()
+    elif allowed:
+        placeholders = ",".join("?" * len(allowed))
+        orgs = conn.execute(
+            f"SELECT id, name FROM organizations WHERE is_active=1 AND id IN ({placeholders}) ORDER BY name",
+            allowed,
+        ).fetchall()
+    else:
+        orgs = []
+    conn.close()
+
+    # Defaults
+    current_year = datetime.now().year
+    selected_org = request.args.get("org_id") or request.form.get("org_id") or ""
+    selected_year = request.args.get("year") or request.form.get("year") or str(current_year)
+    selected_quarter = request.args.get("quarter") or request.form.get("quarter") or str(
+        (datetime.now().month - 1) // 3 + 1
+    )
+
+    try:
+        org_id = int(selected_org) if selected_org else None
+    except ValueError:
+        org_id = None
+    # Sub-admin may only query their assigned orgs
+    if org_id and not can_manage_org(org_id):
+        org_id = None
+    if not is_super_admin() and not org_id and allowed:
+        org_id = allowed[0] if len(allowed) == 1 else None
+
+    try:
+        year = int(selected_year)
+        quarter = int(selected_quarter)
+        if quarter not in (1, 2, 3, 4):
+            quarter = 1
+    except ValueError:
+        year = current_year
+        quarter = 1
+
+    records = get_quarterly_completed(
+        organization_id=org_id,
+        year=year,
+        quarter=quarter,
+    )
+
+    # Summary stats
+    total_amount = sum(r["amount"] for r in records)
+    total_count = len(records)
+    avg_score = round(sum(r["final_score"] for r in records) / total_count, 2) if total_count else 0
+
+    years = list(range(current_year - 3, current_year + 2))
+
+    return render_template(
+        "admin_quarterly_report.html",
+        orgs=orgs,
+        records=records,
+        selected_org=str(org_id) if org_id else "",
+        selected_year=str(year),
+        selected_quarter=str(quarter),
+        years=years,
+        total_amount=total_amount,
+        total_count=total_count,
+        avg_score=avg_score,
+        quarter_label=f"Q{quarter} {year}",
+    )
+
+
+@app.route("/admin/quarterly_report/pdf")
+@login_required("admin")
+def admin_quarterly_report_pdf():
+    """Generate PDF of the quarterly procurement report."""
+    selected_org = request.args.get("org_id") or ""
+    selected_year = request.args.get("year") or str(datetime.now().year)
+    selected_quarter = request.args.get("quarter") or "1"
+
+    try:
+        org_id = int(selected_org) if selected_org else None
+    except ValueError:
+        org_id = None
+    try:
+        year = int(selected_year)
+        quarter = int(selected_quarter)
+    except ValueError:
+        year = datetime.now().year
+        quarter = 1
+
+    records = get_quarterly_completed(organization_id=org_id, year=year, quarter=quarter)
+
+    conn = get_db()
+    org_name = "All Organizations"
+    if org_id:
+        row = conn.execute("SELECT name FROM organizations WHERE id=?", (org_id,)).fetchone()
+        if row:
+            org_name = row["name"]
+    conn.close()
+
+    total_amount = sum(r["amount"] for r in records)
+    total_count = len(records)
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(A4),
+        leftMargin=0.5 * inch,
+        rightMargin=0.5 * inch,
+        topMargin=0.5 * inch,
+        bottomMargin=0.5 * inch,
+    )
+    styles = getSampleStyleSheet()
+    story = []
+
+    story.append(Paragraph(f"<b>{org_name}</b>", styles["Title"]))
+    story.append(Paragraph(
+        f"<b>QUARTERLY PROCUREMENT REPORT – Q{quarter} {year}</b>",
+        styles["Heading1"]
+    ))
+    story.append(Paragraph(
+        f"Generated: {datetime.now().strftime('%d %B %Y %H:%M')}",
+        styles["Normal"]
+    ))
+    story.append(Spacer(1, 12))
+
+    story.append(Paragraph(
+        f"<b>Summary:</b> {total_count} completed/awarded procurement(s) | "
+        f"Total Value: ₦{total_amount:,.2f}",
+        styles["Normal"]
+    ))
+    story.append(Spacer(1, 15))
+
+    # Table
+    table_data = [[
+        "S/N", "Service / Item", "Vendor Awarded", "System", "Committee",
+        "Final Score", "Amount (₦)", "Award Date", "Status"
+    ]]
+
+    for i, r in enumerate(records, 1):
+        table_data.append([
+            str(i),
+            (r["service_display"] or "—")[:40],
+            (r["vendor_name"] or "—")[:28],
+            f"{r['system_score']:.1f}",
+            f"{r['committee_avg']:.1f}",
+            f"{r['final_score']:.1f}",
+            f"{r['amount']:,.0f}",
+            r["award_date"] or "—",
+            r["stage_label"][:18],
+        ])
+
+    if not records:
+        table_data.append(["—", "No completed procurements for this period", "", "", "", "", "", "", ""])
+
+    col_widths = [30, 150, 110, 50, 55, 55, 75, 65, 80]
+    table = Table(table_data, colWidths=col_widths)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a365d")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
+        ("ALIGN", (0, 0), (0, -1), "CENTER"),
+        ("ALIGN", (3, 0), (6, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f7fafc")]),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(table)
+    story.append(Spacer(1, 20))
+    story.append(Paragraph(
+        "This report covers all awarded procurements in the selected quarter. "
+        "Scores = System (40%) + Committee Average (60%).",
+        styles["Normal"]
+    ))
+    story.append(Spacer(1, 10))
+    story.append(Paragraph("Generated by Knowsoft eProcurement System", styles["Normal"]))
+
+    doc.build(story)
+    buffer.seek(0)
+
+    filename = f"Quarterly_Procurement_Report_Q{quarter}_{year}_{org_name[:20].replace(' ', '_')}.pdf"
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/pdf",
+    )
+
+
+@app.route("/admin/quarterly_report/excel")
+@login_required("admin")
+def admin_quarterly_report_excel():
+    """Export quarterly report as Excel (.xlsx)."""
+    selected_org = request.args.get("org_id") or ""
+    selected_year = request.args.get("year") or str(datetime.now().year)
+    selected_quarter = request.args.get("quarter") or "1"
+
+    try:
+        org_id = int(selected_org) if selected_org else None
+    except ValueError:
+        org_id = None
+    try:
+        year = int(selected_year)
+        quarter = int(selected_quarter)
+    except ValueError:
+        year = datetime.now().year
+        quarter = 1
+
+    records = get_quarterly_completed(organization_id=org_id, year=year, quarter=quarter)
+
+    data = []
+    for i, r in enumerate(records, 1):
+        data.append({
+            "S/N": i,
+            "Organization": r.get("org_name"),
+            "Service / Item Provided": r["service_display"],
+            "Vendor Awarded": r["vendor_name"],
+            "System Score": r["system_score"],
+            "Committee Score": r["committee_avg"],
+            "Final Score": r["final_score"],
+            "Final Amount (₦)": r["amount"],
+            "Award Date": r["award_date"],
+            "Status": r["stage_label"],
+            "Progress %": r["progress_percent"],
+        })
+
+    df = pd.DataFrame(data)
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name=f"Q{quarter}_{year}")
+    buffer.seek(0)
+
+    filename = f"Quarterly_Procurement_Q{quarter}_{year}.xlsx"
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
 
 @app.route("/admin/org/<int:org_id>/services", methods=["POST"])
 @login_required("admin")
 def admin_add_service(org_id):
+    if not require_org_access(org_id):
+        return redirect(url_for("admin_dashboard"), code=303)
     title = request.form.get("title", "").strip()
     if title:
         conn = get_db()
+        org = conn.execute("SELECT * FROM organizations WHERE id=?", (org_id,)).fetchone()
+        org_name = org["name"] if org else "Organization"
+        specification = request.form.get("specification", "").strip()
+        deadline = request.form.get("deadline", "").strip()
         conn.execute(
             """INSERT INTO services (organization_id, title, specification, deadline, created_at)
                VALUES (?,?,?,?,?)""",
-            (
-                org_id,
-                title,
-                request.form.get("specification", "").strip(),
-                request.form.get("deadline", "").strip(),
-                datetime.now().isoformat(),
-            ),
+            (org_id, title, specification, deadline, datetime.now().isoformat()),
         )
         conn.commit()
+
+        # Feature 3: all approved (prelisted) vendors of this org receive a notification
+        vendors = conn.execute(
+            "SELECT id, name, email FROM vendors WHERE organization_id=? AND is_approved=1",
+            (org_id,),
+        ).fetchall()
+        notified = 0
+        for v in vendors:
+            if v["email"]:
+                body = (
+                    f"Dear {v['name']},\n\n"
+                    f"A new service opportunity has been published by {org_name}.\n\n"
+                    f"Service: {title}\n"
+                )
+                if specification:
+                    body += f"Specification: {specification[:300]}{'…' if len(specification) > 300 else ''}\n"
+                if deadline:
+                    body += f"Deadline: {deadline}\n"
+                body += (
+                    f"\nYou are on the prelisted vendor list for this organization.\n"
+                    f"Please log in to the eProcurement portal to view details and submit a quotation.\n\n"
+                    f"Regards,\n{org_name}\nKnowsoft eProcurement"
+                )
+                send_email_simulation(
+                    v["email"],
+                    f"New Service Opportunity – {title}",
+                    body,
+                )
+                notified += 1
         conn.close()
-        flash("Service added.", "success")
-    return redirect(url_for("admin_org_detail", org_id=org_id))
+        flash(
+            f"Service added. {notified} prelisted vendor(s) notified.",
+            "success",
+        )
+    return redirect(url_for("admin_org_detail", org_id=org_id), code=303)
 
 
 @app.route("/admin/org/<int:org_id>/committee", methods=["POST"])
 @login_required("admin")
 def admin_add_committee(org_id):
+    if not require_org_access(org_id):
+        return redirect(url_for("admin_dashboard"), code=303)
     name = request.form.get("name", "").strip()
     password = request.form.get("password", "").strip()
     if name and password:
@@ -938,7 +1629,7 @@ def admin_add_committee(org_id):
         conn.commit()
         conn.close()
         flash(f"Committee member '{name}' added. Share the password securely.", "success")
-    return redirect(url_for("admin_org_detail", org_id=org_id))
+    return redirect(url_for("admin_org_detail", org_id=org_id), code=303)
 
 
 @app.route("/admin/service/<int:service_id>/dashboard")
@@ -949,6 +1640,9 @@ def admin_service_dashboard(service_id):
     if not service:
         flash("Service not found.", "danger")
         return redirect(url_for("admin_dashboard"))
+    if not require_org_access(service["organization_id"]):
+        conn.close()
+        return redirect(url_for("admin_dashboard"), code=303)
     org = conn.execute("SELECT * FROM organizations WHERE id=?", (service["organization_id"],)).fetchone()
     rankings = get_final_rankings(organization_id=service["organization_id"], service_id=service_id)
     stage, percent, awarded = compute_service_stage(service_id)
@@ -993,6 +1687,10 @@ def admin_award_contract(quotation_id):
     if not q:
         conn.close()
         flash("Quotation not found.", "danger")
+        return redirect(url_for("admin_dashboard"), code=303)
+    if not can_manage_org(q["organization_id"]):
+        conn.close()
+        flash("You do not have permission to manage this organization.", "danger")
         return redirect(url_for("admin_dashboard"), code=303)
 
     # Clear previous awards on same service
@@ -1073,6 +1771,13 @@ def admin_award_contract(quotation_id):
 @app.route("/admin/service/<int:service_id>/set_progress", methods=["POST"])
 @login_required("admin")
 def admin_set_progress(service_id):
+    conn = get_db()
+    service = conn.execute("SELECT organization_id FROM services WHERE id=?", (service_id,)).fetchone()
+    if not service or not can_manage_org(service["organization_id"]):
+        conn.close()
+        flash("You do not have permission to manage this service.", "danger")
+        return redirect(url_for("admin_dashboard"), code=303)
+    conn.close()
     stage = request.form.get("stage", "in_progress")
     try:
         percent = float(request.form.get("progress_percent") or STAGE_META.get(stage, {}).get("percent", 80))
@@ -1097,6 +1802,8 @@ def admin_set_progress(service_id):
 @app.route("/admin/generate_report/<int:org_id>")
 @login_required("admin")
 def generate_report(org_id):
+    if not require_org_access(org_id):
+        return redirect(url_for("admin_dashboard"), code=303)
     rankings = get_final_rankings(organization_id=org_id)
     if not rankings:
         flash("No quotations available.", "warning")
@@ -1274,16 +1981,20 @@ def generate_lpo(quotation_id):
            WHERE q.id=?""",
         (quotation_id,),
     ).fetchone()
-    # Ensure LPO flag is set when admin downloads
-    if q:
-        conn.execute(
-            "UPDATE quotations SET lpo_available=1 WHERE id=?", (quotation_id,)
-        )
-        conn.commit()
-    conn.close()
     if not q:
+        conn.close()
         flash("Quotation not found.", "danger")
         return redirect(url_for("admin_dashboard"), code=303)
+    if not can_manage_org(q["organization_id"]):
+        conn.close()
+        flash("You do not have permission to manage this organization.", "danger")
+        return redirect(url_for("admin_dashboard"), code=303)
+    # Ensure LPO flag is set when admin downloads
+    conn.execute(
+        "UPDATE quotations SET lpo_available=1 WHERE id=?", (quotation_id,)
+    )
+    conn.commit()
+    conn.close()
 
     send_email_simulation(
         q["vendor_email"],

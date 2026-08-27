@@ -11,86 +11,87 @@
     </a>
 </div>
 
-<div class="card mb-4">
+<div class="card">
     <div class="card-header bg-white">
-        <h5 class="mb-0">My Quotations &amp; Awards</h5>
+        <h5 class="mb-0">My Quotations</h5>
     </div>
     <div class="table-responsive">
-        <table class="table table-hover mb-0 align-middle">
+        <table class="table table-hover mb-0">
             <thead>
                 <tr>
                     <th>#</th>
                     <th>Service</th>
                     <th>Amount (₦)</th>
-                    <th>Status</th>
-                    <th>Award / Offer</th>
+                    <th>Award Status</th>
+                    <th>Offer Response</th>
+                    <th>Submitted</th>
                     <th>Actions</th>
                 </tr>
             </thead>
             <tbody>
                 {% for q in quotations %}
-                <tr class="{% if q.award_status == 'awarded' %}table-warning{% endif %}">
+                {% set award = q.award_status if q.award_status is defined else 'none' %}
+                {% set response = q.vendor_offer_response if q.vendor_offer_response is defined else 'pending' %}
+                <tr>
                     <td>{{ q.id }}</td>
                     <td>{{ q.service_title or q.service_name or '—' }}</td>
                     <td>{{ "{:,.2f}".format(q.total_amount or 0) }}</td>
                     <td>
-                        <span class="badge bg-{{ 'success' if q.status=='awarded' else 'secondary' }}">
-                            {{ q.status or 'submitted' }}
-                        </span>
+                        {% if award == 'awarded' %}
+                            <span class="badge bg-success">Awarded</span>
+                        {% elif award == 'not_awarded' %}
+                            <span class="badge bg-danger">Not Awarded</span>
+                        {% else %}
+                            <span class="badge bg-secondary">{{ award or q.status or 'submitted' }}</span>
+                        {% endif %}
                     </td>
                     <td>
-                        {% if q.award_status == 'awarded' %}
-                            <span class="badge bg-success"><i class="bi bi-trophy"></i> Awarded</span>
-                            {% if q.vendor_offer_response == 'accepted' %}
+                        {% if award == 'awarded' %}
+                            {% if response == 'accepted' %}
                                 <span class="badge bg-primary">Accepted</span>
-                            {% elif q.vendor_offer_response == 'declined' %}
-                                <span class="badge bg-danger">Declined</span>
+                            {% elif response == 'declined' %}
+                                <span class="badge bg-warning text-dark">Declined</span>
                             {% else %}
-                                <span class="badge bg-warning text-dark">Awaiting your response</span>
+                                <span class="badge bg-info text-dark">Awaiting your response</span>
                             {% endif %}
                         {% else %}
-                            <span class="text-muted">—</span>
+                            —
                         {% endif %}
                     </td>
-                    <td class="text-nowrap">
-                        {% if q.invoice_filename %}
-                        <a href="{{ url_for('download_file', filename=q.invoice_filename) }}" class="btn btn-sm btn-outline-secondary" title="Invoice">
-                            <i class="bi bi-file-earmark-pdf"></i>
-                        </a>
-                        {% endif %}
-                        {% if q.award_status == 'awarded' and q.lpo_available %}
-                        <a href="{{ url_for('vendor_download_lpo', quotation_id=q.id) }}" class="btn btn-sm btn-success" title="Download LPO">
-                            <i class="bi bi-download"></i> LPO
-                        </a>
-                        {% endif %}
-                        {% if q.award_status == 'awarded' and (q.vendor_offer_response or 'pending') == 'pending' %}
+                    <td>{{ q.submitted_at[:16] if q.submitted_at else '—' }}</td>
+                    <td>
+                        {% if award == 'awarded' and response == 'pending' %}
                         <form method="POST" action="{{ url_for('vendor_accept_offer', quotation_id=q.id) }}" class="d-inline">
                             <input type="hidden" name="action" value="accepted">
-                            <button type="submit" class="btn btn-sm btn-primary" title="Accept offer">
-                                <i class="bi bi-check-circle"></i> Accept Offer
-                            </button>
+                            <button type="submit" class="btn btn-sm btn-success">Accept Offer</button>
                         </form>
                         <form method="POST" action="{{ url_for('vendor_accept_offer', quotation_id=q.id) }}" class="d-inline">
                             <input type="hidden" name="action" value="declined">
-                            <button type="submit" class="btn btn-sm btn-outline-danger" title="Decline offer"
-                                    onclick="return confirm('Decline this awarded contract?')">
-                                <i class="bi bi-x-circle"></i>
-                            </button>
+                            <button type="submit" class="btn btn-sm btn-outline-danger">Decline</button>
                         </form>
+                        {% endif %}
+                        {% if award == 'awarded' and (q.lpo_available if q.lpo_available is defined else 0) %}
+                        <a href="{{ url_for('vendor_download_lpo', quotation_id=q.id) }}" class="btn btn-sm btn-outline-primary">
+                            <i class="bi bi-download"></i> LPO
+                        </a>
+                        {% endif %}
+                        {% if q.invoice_filename %}
+                        <a href="{{ url_for('download_file', filename=q.invoice_filename) }}" class="btn btn-sm btn-outline-secondary">Invoice</a>
                         {% endif %}
                     </td>
                 </tr>
                 {% else %}
-                <tr><td colspan="6" class="text-center text-muted py-4">No quotations yet. Click "Submit New Quotation" to start.</td></tr>
+                <tr><td colspan="7" class="text-center text-muted py-4">No quotations yet. Click "Submit New Quotation" to start.</td></tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
 </div>
 
-<div class="card">
-    <div class="card-header bg-white"><h5 class="mb-0">Registration Profile</h5></div>
+<div class="card mt-4">
+    <div class="card-header bg-white"><h5 class="mb-0">Registration Profile <span class="badge bg-info text-dark">Prelisted Vendor</span></h5></div>
     <div class="card-body">
+        <p class="text-muted small">You are on the prelisted vendor list for this organization. You will receive a message whenever a new service is published.</p>
         <div class="row">
             <div class="col-md-6"><strong>Email:</strong> {{ vendor.email }}</div>
             <div class="col-md-6"><strong>Phone:</strong> {{ vendor.phone or '—' }}</div>

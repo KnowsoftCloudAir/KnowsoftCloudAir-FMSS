@@ -7,14 +7,20 @@
             <h3 class="text-center mb-3"><i class="bi bi-shield-lock"></i> Admin Login</h3>
             <form method="POST">
                 <div class="mb-3">
+                    <label class="form-label">Username</label>
+                    <input type="text" name="username" class="form-control form-control-lg" value="admin" required autofocus>
+                </div>
+                <div class="mb-3">
                     <label class="form-label">Password</label>
-                    <input type="password" name="password" class="form-control form-control-lg" required autofocus>
+                    <input type="password" name="password" class="form-control form-control-lg" required>
                 </div>
                 <div class="d-grid">
                     <button type="submit" class="btn btn-primary btn-lg">Login</button>
                 </div>
             </form>
-            <p class="text-muted small text-center mt-3 mb-0">Default password is provided by system administrator.</p>
+            <p class="text-muted small text-center mt-3 mb-0">
+                General admin or assigned sub-admin credentials.
+            </p>
         </div>
     </div>
 </div>

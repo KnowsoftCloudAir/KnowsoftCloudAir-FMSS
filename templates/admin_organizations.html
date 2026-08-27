@@ -8,6 +8,7 @@
 
 <div class="row g-4">
     <div class="col-lg-5">
+        {% if is_super %}
         <div class="card p-4">
             <h5>Register New Organization</h5>
             <form method="POST" enctype="multipart/form-data">
@@ -39,6 +40,12 @@
                 <button type="submit" class="btn btn-primary">Add Organization</button>
             </form>
         </div>
+        {% else %}
+        <div class="card p-4">
+            <h5>Your Assigned Clients</h5>
+            <p class="text-muted mb-0">You can manage only the organizations assigned to you by the general administrator.</p>
+        </div>
+        {% endif %}
     </div>
     <div class="col-lg-7">
         <div class="card">
@@ -71,7 +78,7 @@
                             </td>
                             <td class="text-end">
                                 <a href="{{ url_for('admin_org_detail', org_id=o.id) }}" class="btn btn-sm btn-outline-primary">Manage</a>
-                                {% if o.is_active %}
+                                {% if is_super and o.is_active %}
                                 <form method="POST" class="d-inline" onsubmit="return confirm('Deactivate?')">
                                     <input type="hidden" name="action" value="deactivate">
                                     <input type="hidden" name="org_id" value="{{ o.id }}">

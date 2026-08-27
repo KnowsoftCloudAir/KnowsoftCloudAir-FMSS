@@ -76,9 +76,14 @@
 
     <!-- Vendors -->
     <div class="tab-pane fade" id="vendors">
+        <div class="alert alert-info py-2">
+            <i class="bi bi-info-circle"></i>
+            All registered approved vendors form the <strong>prelisted vendor list</strong> for this organization.
+            They automatically receive a notification message whenever a new service is added.
+        </div>
         <div class="card">
             <table class="table mb-0">
-                <thead><tr><th>Name</th><th>Email</th><th>Service Type</th><th>CAC</th><th>Registered</th></tr></thead>
+                <thead><tr><th>Name</th><th>Email</th><th>Service Type</th><th>CAC</th><th>Registered</th><th>List</th></tr></thead>
                 <tbody>
                     {% for v in vendors %}
                     <tr>
@@ -87,9 +92,16 @@
                         <td>{{ v.service_type or '—' }}</td>
                         <td>{{ v.cac_no or '—' }}</td>
                         <td>{{ v.created_at[:10] if v.created_at else '—' }}</td>
+                        <td>
+                            {% if v.is_approved %}
+                            <span class="badge bg-success">Prelisted</span>
+                            {% else %}
+                            <span class="badge bg-secondary">Pending</span>
+                            {% endif %}
+                        </td>
                     </tr>
                     {% else %}
-                    <tr><td colspan="5" class="text-muted text-center">No vendors registered</td></tr>
+                    <tr><td colspan="6" class="text-muted text-center">No vendors registered</td></tr>
                     {% endfor %}
                 </tbody>
             </table>
@@ -163,16 +175,8 @@
                             <td>{{ r.system_score }}</td>
                             <td>{{ r.committee_avg }} ({{ r.num_scores }})</td>
                             <td><strong>{{ r.final_score }}</strong></td>
-                            <td class="text-nowrap">
-                                {% if r.award_status == 'awarded' %}
-                                <span class="badge bg-success me-1">Awarded</span>
-                                <a href="{{ url_for('generate_lpo', quotation_id=r.id) }}" class="btn btn-sm btn-outline-success">LPO</a>
-                                {% else %}
-                                <form method="POST" action="{{ url_for('admin_award_contract', quotation_id=r.id) }}" class="d-inline"
-                                      onsubmit="return confirm('Award contract to this vendor?')">
-                                    <button type="submit" class="btn btn-sm btn-success"><i class="bi bi-trophy"></i> Award</button>
-                                </form>
-                                {% endif %}
+                            <td>
+                                <a href="{{ url_for('generate_lpo', quotation_id=r.id) }}" class="btn btn-sm btn-success">LPO</a>
                                 {% if r.invoice_filename %}
                                 <a href="{{ url_for('download_file', filename=r.invoice_filename) }}" class="btn btn-sm btn-outline-secondary">Invoice</a>
                                 {% endif %}

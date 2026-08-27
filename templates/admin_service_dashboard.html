@@ -9,56 +9,18 @@
     </ol>
 </nav>
 
-<h2>{{ service.title }}</h2>
-<p class="text-muted">{{ service.specification or '' }} {% if service.deadline %}· Deadline: {{ service.deadline }}{% endif %}</p>
-
-<!-- Progress tracker -->
-<div class="card mb-4">
-    <div class="card-body">
-        <div class="d-flex justify-content-between align-items-center mb-2">
-            <div>
-                <strong>Procurement status:</strong>
-                <span class="badge bg-primary ms-1">{{ stage_label }}</span>
-            </div>
-            <span class="fw-bold">{{ "%.0f"|format(progress_percent) }}%</span>
+<div class="d-flex justify-content-between align-items-start mb-3">
+    <div>
+        <h2>{{ service.title }}</h2>
+        <p class="text-muted mb-1">{{ service.specification or '' }}</p>
+        {% if service.deadline %}<small class="text-muted">Deadline: {{ service.deadline }}</small>{% endif %}
+    </div>
+    <div class="text-end">
+        <span class="badge bg-primary fs-6">{{ stage_label or stage }}</span>
+        <div class="progress mt-2" style="width:180px;height:8px;">
+            <div class="progress-bar" role="progressbar" style="width: {{ progress_percent or 0 }}%"></div>
         </div>
-        <div class="progress" style="height: 22px;">
-            <div class="progress-bar progress-bar-striped {% if stage == 'completed' %}bg-success{% elif stage == 'in_progress' %}bg-info{% else %}bg-primary{% endif %}"
-                 role="progressbar"
-                 style="width: {{ progress_percent }}%;"
-                 aria-valuenow="{{ progress_percent }}" aria-valuemin="0" aria-valuemax="100">
-                {{ "%.0f"|format(progress_percent) }}%
-            </div>
-        </div>
-        <div class="d-flex justify-content-between small text-muted mt-2 flex-wrap gap-1">
-            <span>Open</span>
-            <span>Quotes received</span>
-            <span>Under review</span>
-            <span>Vendor selected</span>
-            <span>In progress</span>
-            <span>Completed</span>
-        </div>
-
-        {% if stage in ('vendor_selected', 'in_progress', 'completed') or awarded %}
-        <hr>
-        <form method="POST" action="{{ url_for('admin_set_progress', service_id=service.id) }}" class="row g-2 align-items-end">
-            <div class="col-md-4">
-                <label class="form-label">Update stage</label>
-                <select name="stage" class="form-select">
-                    {% for key, meta in stage_meta.items() %}
-                    <option value="{{ key }}" {% if key == stage %}selected{% endif %}>{{ meta.label }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="col-md-3">
-                <label class="form-label">Progress %</label>
-                <input type="number" name="progress_percent" class="form-control" min="0" max="100" step="1" value="{{ '%.0f'|format(progress_percent) }}">
-            </div>
-            <div class="col-md-3">
-                <button type="submit" class="btn btn-outline-primary">Update status</button>
-            </div>
-        </form>
-        {% endif %}
+        <small class="text-muted">{{ (progress_percent or 0)|int }}%</small>
     </div>
 </div>
 
@@ -66,13 +28,13 @@
     <div class="col-md-3">
         <div class="card stat-card">
             <h3>{{ rankings|length }}</h3>
-            <div class="text-muted">Quotations Received</div>
+            <div class="text-muted">Quotations</div>
         </div>
     </div>
     <div class="col-md-3">
         <div class="card stat-card">
             <h3>₦{{ "{:,.0f}".format(rankings|sum(attribute='total_amount') if rankings else 0) }}</h3>
-            <div class="text-muted">Total Quoted Value</div>
+            <div class="text-muted">Total Quoted</div>
         </div>
     </div>
     <div class="col-md-3">
@@ -83,36 +45,45 @@
     </div>
     <div class="col-md-3">
         <div class="card stat-card">
-            <h3>
-                {% if awarded %}
-                    {{ awarded.vendor_name if awarded.vendor_name is defined else 'Awarded' }}
-                {% elif rankings %}
-                    {{ rankings[0].vendor_name[:15] }}
-                {% else %}—{% endif %}
-            </h3>
-            <div class="text-muted">{% if awarded %}Awarded Vendor{% else %}Leading Vendor{% endif %}</div>
+            <h3>{% if awarded %}Awarded{% else %}—{% endif %}</h3>
+            <div class="text-muted">Contract Status</div>
         </div>
     </div>
 </div>
 
 {% if awarded %}
 <div class="alert alert-success">
-    <strong><i class="bi bi-trophy"></i> Contract awarded</strong> —
-    Quotation #{{ awarded.id }}
+    <strong>Contract awarded</strong> to quotation #{{ awarded.id }}.
+    Vendor offer response: <strong>{{ awarded.vendor_offer_response or 'pending' }}</strong>.
     {% if awarded.vendor_offer_response == 'accepted' %}
-        · Vendor has <strong>accepted</strong> the offer
-    {% elif awarded.vendor_offer_response == 'declined' %}
-        · Vendor has <strong>declined</strong> the offer
-    {% else %}
-        · Waiting for vendor to accept the offer
+    Other vendors have been marked <em>Not Awarded</em>.
     {% endif %}
-    <a href="{{ url_for('generate_lpo', quotation_id=awarded.id) }}" class="btn btn-sm btn-success ms-2">Download LPO</a>
 </div>
 {% endif %}
 
+<form method="POST" action="{{ url_for('admin_set_progress', service_id=service.id) }}" class="card card-body mb-4">
+    <div class="row g-2 align-items-end">
+        <div class="col-md-4">
+            <label class="form-label">Update stage</label>
+            <select name="stage" class="form-select">
+                {% for key, meta in stage_meta.items() %}
+                <option value="{{ key }}" {% if stage == key %}selected{% endif %}>{{ meta.label }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="col-md-3">
+            <label class="form-label">Progress %</label>
+            <input type="number" name="progress_percent" class="form-control" min="0" max="100" value="{{ progress_percent or 0 }}">
+        </div>
+        <div class="col-md-3">
+            <button type="submit" class="btn btn-outline-primary">Update Progress</button>
+        </div>
+    </div>
+</form>
+
 <div class="card">
     <div class="table-responsive">
-        <table class="table mb-0 align-middle">
+        <table class="table mb-0">
             <thead>
                 <tr>
                     <th>Rank</th>
@@ -121,13 +92,14 @@
                     <th>System</th>
                     <th>Committee</th>
                     <th>Final</th>
-                    <th>Award status</th>
+                    <th>Award Status</th>
                     <th>Actions</th>
                 </tr>
             </thead>
             <tbody>
                 {% for r in rankings %}
-                <tr class="{% if r.award_status == 'awarded' %}table-warning{% elif loop.first %}table-light{% endif %}">
+                {% set award = r.award_status if r.award_status is defined else 'none' %}
+                <tr class="{% if award == 'awarded' %}table-success{% elif award == 'not_awarded' %}table-secondary{% elif loop.first %}table-warning{% endif %}">
                     <td>{{ loop.index }}</td>
                     <td>{{ r.vendor_name }}</td>
                     <td>₦{{ "{:,.0f}".format(r.total_amount or 0) }}</td>
@@ -135,32 +107,25 @@
                     <td>{{ r.committee_avg }}</td>
                     <td><strong>{{ r.final_score }}</strong></td>
                     <td>
-                        {% if r.award_status == 'awarded' %}
-                            <span class="badge bg-success">Awarded</span>
-                            {% if r.vendor_offer_response == 'accepted' %}
-                                <span class="badge bg-primary">Accepted</span>
-                            {% elif r.vendor_offer_response == 'declined' %}
-                                <span class="badge bg-danger">Declined</span>
-                            {% else %}
-                                <span class="badge bg-warning text-dark">Pending accept</span>
-                            {% endif %}
+                        {% if award == 'awarded' %}
+                        <span class="badge bg-success">Awarded</span>
+                        {% elif award == 'not_awarded' %}
+                        <span class="badge bg-danger">Not Awarded</span>
                         {% else %}
-                            <span class="text-muted">—</span>
+                        <span class="badge bg-secondary">{{ award or 'pending' }}</span>
                         {% endif %}
                     </td>
-                    <td class="text-nowrap">
+                    <td>
+                        {% if award != 'awarded' and award != 'not_awarded' %}
+                        <form method="POST" action="{{ url_for('admin_award_contract', quotation_id=r.id) }}" class="d-inline" onsubmit="return confirm('Award contract to {{ r.vendor_name }}?');">
+                            <button type="submit" class="btn btn-sm btn-success">Award</button>
+                        </form>
+                        {% endif %}
+                        {% if award == 'awarded' %}
+                        <a href="{{ url_for('generate_lpo', quotation_id=r.id) }}" class="btn btn-sm btn-outline-primary">LPO</a>
+                        {% endif %}
                         {% if r.invoice_filename %}
                         <a href="{{ url_for('download_file', filename=r.invoice_filename) }}" class="btn btn-sm btn-outline-secondary">Invoice</a>
-                        {% endif %}
-                        {% if r.award_status != 'awarded' %}
-                        <form method="POST" action="{{ url_for('admin_award_contract', quotation_id=r.id) }}" class="d-inline"
-                              onsubmit="return confirm('Award contract to {{ r.vendor_name }}? LPO will appear on their dashboard.')">
-                            <button type="submit" class="btn btn-sm btn-success">
-                                <i class="bi bi-trophy"></i> Award Contract
-                            </button>
-                        </form>
-                        {% else %}
-                        <a href="{{ url_for('generate_lpo', quotation_id=r.id) }}" class="btn btn-sm btn-outline-success">LPO</a>
                         {% endif %}
                     </td>
                 </tr>
