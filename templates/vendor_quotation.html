@@ -2,9 +2,9 @@
 {% block title %}Submit Quotation{% endblock %}
 {% block content %}
 <div class="row justify-content-center">
-    <div class="col-lg-10">
+    <div class="col-lg-11">
         <div class="card p-4 mb-3">
-            <h4>Vendor Details (from registration)</h4>
+            <h4 class="mb-3">Vendor Details (from registration)</h4>
             <div class="row small">
                 <div class="col-md-4"><strong>Name:</strong> {{ vendor.name }}</div>
                 <div class="col-md-4"><strong>Email:</strong> {{ vendor.email }}</div>
@@ -16,87 +16,146 @@
         </div>
 
         <div class="card p-4">
-            <h3 class="mb-3">Procurement Quotation Form</h3>
-            <p class="text-muted">Recipient: <strong>{{ org.name }}</strong></p>
+            <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
+                <div>
+                    <h3 class="mb-1">Quotation / Procurement Request</h3>
+                    <p class="text-muted mb-0">Recipient: <strong>{{ org.name }}</strong></p>
+                </div>
+                <div class="text-muted small text-end">
+                    <div>Date: {{ now().strftime('%d %b %Y') if now is defined else '' }}</div>
+                </div>
+            </div>
+
             <form method="POST" enctype="multipart/form-data" id="quoteForm">
-                <div class="row g-3">
-                    <div class="col-md-12">
-                        <label class="form-label required">Select Procurement Service</label>
-                        <select name="service_id" class="form-select" required>
-                            <option value="">-- Choose Service --</option>
-                            {% for s in services %}
-                            <option value="{{ s.id }}">{{ s.title }} {% if s.deadline %}(Deadline: {{ s.deadline }}){% endif %}</option>
-                            {% endfor %}
-                        </select>
-                        {% if not services %}
-                        <div class="form-text text-warning">No active services. Contact the organization admin.</div>
-                        {% endif %}
+                <div class="mb-4">
+                    <label class="form-label required">Select Procurement Service</label>
+                    <select name="service_id" class="form-select" required>
+                        <option value="">-- Choose Service --</option>
+                        {% for s in services %}
+                        <option value="{{ s.id }}">{{ s.title }} {% if s.deadline %}(Deadline: {{ s.deadline }}){% endif %}</option>
+                        {% endfor %}
+                    </select>
+                    {% if not services %}
+                    <div class="form-text text-warning">No open services. Contact the organization admin.</div>
+                    {% endif %}
+                </div>
+
+                <div class="table-responsive mb-2">
+                    <table class="table table-bordered align-middle mb-0" id="linesTable">
+                        <thead>
+                            <tr>
+                                <th style="width:4%">#</th>
+                                <th style="width:42%">Description</th>
+                                <th style="width:12%">Qty</th>
+                                <th style="width:16%">Unit Cost (₦)</th>
+                                <th style="width:16%">Amount (₦)</th>
+                                <th style="width:10%"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="lineBody">
+                            <tr class="line-row">
+                                <td class="row-num text-muted">1</td>
+                                <td>
+                                    <input type="text" name="line_desc[]" class="form-control form-control-sm" required
+                                           placeholder="Item / service description">
+                                </td>
+                                <td>
+                                    <input type="number" name="line_qty[]" class="form-control form-control-sm line-qty"
+                                           step="0.01" min="0.01" value="1" required>
+                                </td>
+                                <td>
+                                    <input type="number" name="line_unit[]" class="form-control form-control-sm line-unit"
+                                           step="0.01" min="0" value="0" required>
+                                </td>
+                                <td>
+                                    <input type="text" class="form-control form-control-sm line-amt" readonly
+                                           value="0.00" tabindex="-1">
+                                </td>
+                                <td class="text-center">
+                                    <button type="button" class="btn btn-sm btn-outline-danger btn-remove" title="Remove row" disabled>
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="mb-4">
+                    <button type="button" class="btn btn-sm btn-outline-primary" id="addRow">
+                        <i class="bi bi-plus-lg"></i> Add line
+                    </button>
+                </div>
+
+                <div class="row justify-content-end mb-4">
+                    <div class="col-md-5">
+                        <table class="table table-sm mb-0">
+                            <tr>
+                                <td class="text-muted">Subtotal</td>
+                                <td class="text-end fw-semibold">₦<span id="subtotal">0.00</span></td>
+                            </tr>
+                            <tr>
+                                <td class="text-muted align-middle">
+                                    Tax
+                                    <select name="tax_rate" id="tax_rate" class="form-select form-select-sm d-inline-block ms-2" style="width:auto;min-width:5rem;">
+                                        {% for t in [0, 2.5, 5, 7.5, 10, 12.5, 15, 20] %}
+                                        <option value="{{ t }}" {% if t == 7.5 %}selected{% endif %}>{{ t }}%</option>
+                                        {% endfor %}
+                                    </select>
+                                </td>
+                                <td class="text-end">₦<span id="tax_amount">0.00</span></td>
+                            </tr>
+                            <tr class="table-light">
+                                <td class="fw-bold">Total</td>
+                                <td class="text-end fw-bold fs-5">₦<span id="total">0.00</span></td>
+                            </tr>
+                        </table>
                     </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Quality / Specification notes</label>
+                    <textarea name="quality_spec" class="form-control" rows="2"
+                              placeholder="Quality standards, brands, compliance..."></textarea>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Other relevant details</label>
+                    <textarea name="other_details" class="form-control" rows="2"
+                              placeholder="Delivery timeline, warranty, payment terms..."></textarea>
+                </div>
+
+                <div class="row g-3 mb-3">
                     <div class="col-md-4">
-                        <label class="form-label required">Price per Unit (₦)</label>
-                        <input type="number" name="unit_price" id="unit_price" class="form-control" step="0.01" min="0" required>
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label required">Quantity</label>
-                        <input type="number" name="quantity" id="quantity" class="form-control" step="0.01" min="0" required>
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label">Tax Rate (%)</label>
-                        <select name="tax_rate" id="tax_rate" class="form-select">
-                            {% for t in range(0, 101) %}
-                            <option value="{{ t }}" {% if t==7.5 %}selected{% endif %}>{{ t }}%</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div class="col-12">
-                        <div class="alert alert-light border">
-                            <strong>Subtotal:</strong> ₦<span id="subtotal">0.00</span> &nbsp;|&nbsp;
-                            <strong>Tax:</strong> ₦<span id="tax_amount">0.00</span> &nbsp;|&nbsp;
-                            <strong>Total:</strong> ₦<span id="total">0.00</span>
-                        </div>
-                    </div>
-                    <div class="col-12">
-                        <label class="form-label">Quality / Specification</label>
-                        <textarea name="quality_spec" class="form-control" rows="2" placeholder="Describe quality standards, brands, standards compliance..."></textarea>
-                    </div>
-                    <div class="col-12">
-                        <label class="form-label">Other Relevant Details</label>
-                        <textarea name="other_details" class="form-control" rows="2" placeholder="Delivery timeline, warranty, payment terms, etc."></textarea>
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label">Upload Quotation / Invoice (PDF)</label>
+                        <label class="form-label">Upload Quotation / Invoice (PDF/Image)</label>
                         <input type="file" name="invoice" class="form-control" accept=".pdf,.png,.jpg,.jpeg">
                     </div>
                     <div class="col-md-4">
-                        <label class="form-label">Delivery Note (optional on first submit)</label>
+                        <label class="form-label">Delivery Note (optional)</label>
                         <input type="file" name="delivery_note" class="form-control" accept=".pdf,.png,.jpg,.jpeg">
                     </div>
                     <div class="col-md-4">
-                        <label class="form-label">Receipt (optional on first submit)</label>
+                        <label class="form-label">Receipt (optional)</label>
                         <input type="file" name="receipt" class="form-control" accept=".pdf,.png,.jpg,.jpeg">
                     </div>
-                    <div class="col-md-6">
-                        <label class="form-label">Acceptance of Offer</label>
-                        <select name="acceptance_status" class="form-select">
-                            <option value="accepted">I accept to provide this service</option>
-                            <option value="rejected">I decline this opportunity</option>
-                        </select>
-                    </div>
-                    <div class="col-12">
-                        <div class="form-check">
-                            <input class="form-check-input" type="checkbox" name="consent" id="consent" value="1" required>
-                            <label class="form-check-label" for="consent">
-                                I consent and confirm that I am ready to comply with the terms and conditions of delivering the service/goods and of payment.
-                            </label>
-                        </div>
-                    </div>
                 </div>
-                <div class="mt-4">
-                    <button type="submit" class="btn btn-primary btn-lg" {% if not services %}disabled{% endif %}>
-                        <i class="bi bi-send"></i> Submit Quotation
-                    </button>
-                    <a href="{{ url_for('vendor_dashboard') }}" class="btn btn-outline-secondary">Cancel</a>
+
+                <div class="mb-3">
+                    <label class="form-label">Acceptance</label>
+                    <select name="acceptance_status" class="form-select">
+                        <option value="accepted">I accept the terms of this procurement</option>
+                        <option value="conditional">Conditional acceptance (see notes)</option>
+                    </select>
                 </div>
+                <div class="form-check mb-4">
+                    <input class="form-check-input" type="checkbox" name="consent" id="consent" value="1" required>
+                    <label class="form-check-label" for="consent">
+                        I consent and confirm that I am ready to comply with the terms and conditions of delivering the service/goods and of payment.
+                    </label>
+                </div>
+
+                <button type="submit" class="btn btn-primary btn-lg" {% if not services %}disabled{% endif %}>
+                    <i class="bi bi-send"></i> Submit Quotation
+                </button>
+                <a href="{{ url_for('vendor_dashboard') }}" class="btn btn-outline-secondary">Cancel</a>
             </form>
         </div>
     </div>
@@ -104,20 +163,67 @@
 {% endblock %}
 {% block extra_js %}
 <script>
-function recalc() {
-    const up = parseFloat(document.getElementById('unit_price').value) || 0;
-    const qty = parseFloat(document.getElementById('quantity').value) || 0;
-    const tax = parseFloat(document.getElementById('tax_rate').value) || 0;
-    const sub = up * qty;
-    const taxAmt = sub * (tax / 100);
-    const total = sub + taxAmt;
-    document.getElementById('subtotal').textContent = sub.toLocaleString('en-NG', {minimumFractionDigits:2});
-    document.getElementById('tax_amount').textContent = taxAmt.toLocaleString('en-NG', {minimumFractionDigits:2});
-    document.getElementById('total').textContent = total.toLocaleString('en-NG', {minimumFractionDigits:2});
-}
-['unit_price','quantity','tax_rate'].forEach(id => {
-    document.getElementById(id).addEventListener('input', recalc);
-    document.getElementById(id).addEventListener('change', recalc);
-});
+(function () {
+    const body = document.getElementById('lineBody');
+    const taxSel = document.getElementById('tax_rate');
+
+    function fmt(n) {
+        return (n || 0).toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function renumber() {
+        body.querySelectorAll('.line-row').forEach((tr, i) => {
+            tr.querySelector('.row-num').textContent = i + 1;
+            const rm = tr.querySelector('.btn-remove');
+            rm.disabled = body.querySelectorAll('.line-row').length <= 1;
+        });
+    }
+
+    function recalc() {
+        let sub = 0;
+        body.querySelectorAll('.line-row').forEach(tr => {
+            const qty = parseFloat(tr.querySelector('.line-qty').value) || 0;
+            const unit = parseFloat(tr.querySelector('.line-unit').value) || 0;
+            const amt = qty * unit;
+            tr.querySelector('.line-amt').value = fmt(amt);
+            sub += amt;
+        });
+        const tax = parseFloat(taxSel.value) || 0;
+        const taxAmt = sub * (tax / 100);
+        const total = sub + taxAmt;
+        document.getElementById('subtotal').textContent = fmt(sub);
+        document.getElementById('tax_amount').textContent = fmt(taxAmt);
+        document.getElementById('total').textContent = fmt(total);
+    }
+
+    body.addEventListener('input', e => {
+        if (e.target.classList.contains('line-qty') || e.target.classList.contains('line-unit')) recalc();
+    });
+    taxSel.addEventListener('change', recalc);
+
+    document.getElementById('addRow').addEventListener('click', () => {
+        const tr = body.querySelector('.line-row').cloneNode(true);
+        tr.querySelectorAll('input').forEach(inp => {
+            if (inp.classList.contains('line-qty')) inp.value = '1';
+            else if (inp.classList.contains('line-unit')) inp.value = '0';
+            else if (inp.classList.contains('line-amt')) inp.value = '0.00';
+            else inp.value = '';
+        });
+        body.appendChild(tr);
+        renumber();
+        recalc();
+    });
+
+    body.addEventListener('click', e => {
+        const btn = e.target.closest('.btn-remove');
+        if (!btn || btn.disabled) return;
+        btn.closest('.line-row').remove();
+        renumber();
+        recalc();
+    });
+
+    renumber();
+    recalc();
+})();
 </script>
 {% endblock %}

@@ -14,9 +14,15 @@
         <h2 class="mb-0">{{ org.name }}</h2>
         <small class="text-muted">{{ org.address or '' }}</small>
     </div>
-    <div>
-        <a href="{{ url_for('generate_report', org_id=org.id) }}" class="btn btn-outline-primary">
+    <div class="d-flex flex-wrap gap-2">
+        <a href="{{ url_for('generate_report', org_id=org.id) }}" class="btn btn-outline-primary btn-sm">
             <i class="bi bi-file-earmark-pdf"></i> Evaluation Report
+        </a>
+        <a href="{{ url_for('org_full_procurement_report', org_id=org.id) }}" class="btn btn-outline-success btn-sm">
+            <i class="bi bi-journal-text"></i> Full Procurement Report
+        </a>
+        <a href="{{ url_for('org_financial_excel', org_id=org.id) }}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-file-earmark-excel"></i> Excel Financial Report
         </a>
     </div>
 </div>

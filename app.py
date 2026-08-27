@@ -988,16 +988,49 @@ def vendor_quotation():
 
     if request.method == "POST":
         service_id = request.form.get("service_id")
-        unit_price = float(request.form.get("unit_price") or 0)
-        quantity = float(request.form.get("quantity") or 0)
         tax_rate = float(request.form.get("tax_rate") or 0)
         quality_spec = request.form.get("quality_spec", "").strip()
         other_details = request.form.get("other_details", "").strip()
         consent = 1 if request.form.get("consent") else 0
         acceptance = request.form.get("acceptance_status", "accepted")
 
-        if not service_id or unit_price <= 0 or quantity <= 0 or not consent:
-            flash("Please fill all required fields and accept the consent statement.", "danger")
+        # Multi-line quotation: Description / Qty / Unit cost / Amount
+        descs = request.form.getlist("line_desc[]") or request.form.getlist("line_desc")
+        qtys = request.form.getlist("line_qty[]") or request.form.getlist("line_qty")
+        units = request.form.getlist("line_unit[]") or request.form.getlist("line_unit")
+        line_items = []
+        subtotal = 0.0
+        for i in range(max(len(descs), len(qtys), len(units))):
+            desc = (descs[i] if i < len(descs) else "").strip()
+            try:
+                qty = float(qtys[i]) if i < len(qtys) else 0
+            except (TypeError, ValueError):
+                qty = 0
+            try:
+                unit = float(units[i]) if i < len(units) else 0
+            except (TypeError, ValueError):
+                unit = 0
+            if not desc and qty <= 0 and unit <= 0:
+                continue
+            amt = qty * unit
+            line_items.append({"description": desc or "Item", "qty": qty, "unit_cost": unit, "amount": amt})
+            subtotal += amt
+
+        # Backward compatible single-line fields if no multi-line data
+        if not line_items:
+            unit_price = float(request.form.get("unit_price") or 0)
+            quantity = float(request.form.get("quantity") or 0)
+            if unit_price > 0 and quantity > 0:
+                line_items.append({
+                    "description": quality_spec or "Quoted item",
+                    "qty": quantity,
+                    "unit_cost": unit_price,
+                    "amount": unit_price * quantity,
+                })
+                subtotal = unit_price * quantity
+
+        if not service_id or not line_items or subtotal <= 0 or not consent:
+            flash("Please add at least one quotation line (description, qty, unit cost) and accept the consent statement.", "danger")
             conn.close()
             return redirect(url_for("vendor_quotation"))
 
@@ -1011,10 +1044,18 @@ def vendor_quotation():
             conn.close()
             return redirect(url_for("vendor_quotation"), code=303)
 
-        subtotal = unit_price * quantity
         tax_amount = subtotal * (tax_rate / 100.0)
         total = subtotal + tax_amount
+        # Summary fields for existing ranking/report logic
+        quantity = sum(li["qty"] for li in line_items) or 1
+        unit_price = subtotal / quantity if quantity else subtotal
         service_title = service["title"] if service else ""
+        import json as _json
+        lines_json = _json.dumps(line_items)
+        if other_details:
+            other_details = other_details + "\n\n[Line items]\n" + lines_json
+        else:
+            other_details = "[Line items]\n" + lines_json
 
         invoice_filename = None
         inv = request.files.get("invoice")
@@ -2354,6 +2395,304 @@ def generate_report(org_id):
         as_attachment=True,
         download_name=f"Committee_Report_{org['name'][:20]}_{datetime.now().strftime('%Y%m%d')}.pdf",
         mimetype="application/pdf",
+    )
+
+
+def _org_procurement_records(org_id):
+    """All procurement activity for an organization (quotations, awards, LPO, receipts)."""
+    conn = get_db()
+    rows = conn.execute(
+        """
+        SELECT
+            q.id AS quotation_id,
+            q.service_id,
+            q.service_title,
+            q.unit_price,
+            q.quantity,
+            q.tax_rate,
+            q.tax_amount,
+            q.subtotal,
+            q.total_amount,
+            q.system_score,
+            q.award_status,
+            q.awarded_at,
+            q.submitted_at,
+            q.lpo_available,
+            q.invoice_filename,
+            q.delivery_note_filename,
+            q.receipt_filename,
+            q.vendor_offer_response,
+            q.status,
+            q.other_details,
+            v.id AS vendor_id,
+            v.name AS vendor_name,
+            v.email AS vendor_email,
+            v.phone AS vendor_phone,
+            v.cac_no,
+            v.tin,
+            s.title AS service_name,
+            s.deadline,
+            s.procurement_stage,
+            s.progress_percent,
+            pr.lpo_sent,
+            pr.lpo_sent_at,
+            pr.delivery_status,
+            pr.certificate_issued,
+            pr.closed,
+            pr.notes AS pr_notes
+        FROM quotations q
+        JOIN vendors v ON q.vendor_id = v.id
+        LEFT JOIN services s ON q.service_id = s.id
+        LEFT JOIN procurement_records pr ON pr.quotation_id = q.id
+        WHERE q.organization_id = ?
+        ORDER BY COALESCE(q.awarded_at, q.submitted_at) DESC
+        """,
+        (org_id,),
+    ).fetchall()
+    result = [dict(r) for r in rows]
+    conn.close()
+    return result
+
+
+@app.route("/admin/org/<int:org_id>/full_report")
+@login_required("admin")
+def org_full_procurement_report(org_id):
+    """Downloadable full procurement report for one recipient organization."""
+    if not require_org_access(org_id):
+        return redirect(url_for("admin_dashboard"), code=303)
+    conn = get_db()
+    org = conn.execute("SELECT * FROM organizations WHERE id=?", (org_id,)).fetchone()
+    conn.close()
+    if not org:
+        flash("Organization not found.", "danger")
+        return redirect(url_for("admin_organizations"), code=303)
+
+    records = _org_procurement_records(org_id)
+    awarded = [r for r in records if (r.get("award_status") or "") == "awarded"]
+    today = datetime.now().strftime("%d %B %Y")
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=0.6 * inch, rightMargin=0.6 * inch)
+    styles = getSampleStyleSheet()
+    story = []
+
+    if org["logo_filename"] and os.path.exists(os.path.join("static", org["logo_filename"])):
+        try:
+            story.append(Image(os.path.join("static", org["logo_filename"]), width=1.6 * inch, height=0.8 * inch))
+            story.append(Spacer(1, 8))
+        except Exception:
+            pass
+
+    story.append(Paragraph(f"<b>{org['name']}</b>", styles["Title"]))
+    story.append(Paragraph("<b>FULL PROCUREMENT REPORT</b>", styles["Heading1"]))
+    story.append(Paragraph(
+        f"Address: {org['address'] or '—'} &nbsp;|&nbsp; Email: {org['contact_email'] or '—'} &nbsp;|&nbsp; "
+        f"Phone: {org['contact_phone'] or '—'}<br/>Generated: {today}",
+        styles["Normal"],
+    ))
+    story.append(Spacer(1, 14))
+
+    total_spend = sum(float(r.get("total_amount") or 0) for r in awarded)
+    story.append(Paragraph("1. SUMMARY", styles["Heading2"]))
+    story.append(Paragraph(
+        f"Total quotations received: <b>{len(records)}</b><br/>"
+        f"Contracts awarded: <b>{len(awarded)}</b><br/>"
+        f"Total awarded value: <b>₦{total_spend:,.2f}</b><br/>"
+        f"Purchase orders (LPO) issued: <b>{sum(1 for r in awarded if r.get('lpo_available') or r.get('lpo_sent'))}</b>",
+        styles["Normal"],
+    ))
+    story.append(Spacer(1, 12))
+
+    story.append(Paragraph("2. ALL PROCUREMENT ACTIVITY", styles["Heading2"]))
+    if not records:
+        story.append(Paragraph("No procurement activity recorded yet.", styles["Normal"]))
+    else:
+        data = [["#", "Service", "Vendor", "Amount (₦)", "Status", "Date"]]
+        for i, r in enumerate(records, 1):
+            data.append([
+                str(i),
+                (r.get("service_name") or r.get("service_title") or "—")[:28],
+                (r.get("vendor_name") or "—")[:22],
+                f"{float(r.get('total_amount') or 0):,.0f}",
+                (r.get("award_status") or r.get("status") or "submitted")[:12],
+                (r.get("awarded_at") or r.get("submitted_at") or "")[:10],
+            ])
+        t = Table(data, colWidths=[28, 120, 100, 70, 70, 70])
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a365d")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ]))
+        story.append(t)
+    story.append(Spacer(1, 16))
+
+    story.append(Paragraph("3. PURCHASE ORDERS (LPO) ISSUED", styles["Heading2"]))
+    lpos = [r for r in awarded if r.get("lpo_available") or r.get("lpo_sent")]
+    if not lpos:
+        story.append(Paragraph("No purchase orders issued yet.", styles["Normal"]))
+    else:
+        data = [["LPO #", "Vendor", "Service", "Amount (₦)", "Issued"]]
+        for r in lpos:
+            data.append([
+                f"LPO-{r['quotation_id']}",
+                (r.get("vendor_name") or "—")[:24],
+                (r.get("service_name") or r.get("service_title") or "—")[:28],
+                f"{float(r.get('total_amount') or 0):,.2f}",
+                (r.get("lpo_sent_at") or r.get("awarded_at") or "")[:10],
+            ])
+        t = Table(data, colWidths=[55, 110, 130, 80, 70])
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2b6cb0")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
+        ]))
+        story.append(t)
+    story.append(Spacer(1, 16))
+
+    story.append(Paragraph("4. PAYMENT RECEIPTS / VOUCHERS", styles["Heading2"]))
+    story.append(Paragraph(
+        f"Company: <b>{org['name']}</b> — documents uploaded against awarded quotations "
+        "(invoice, delivery note, receipt).",
+        styles["Normal"],
+    ))
+    story.append(Spacer(1, 6))
+    receipts = [r for r in records if r.get("invoice_filename") or r.get("receipt_filename") or r.get("delivery_note_filename")]
+    if not receipts:
+        story.append(Paragraph("No payment receipts or supporting documents on file yet.", styles["Normal"]))
+    else:
+        data = [["Ref", "Vendor", "Invoice", "Delivery Note", "Receipt", "Amount (₦)"]]
+        for r in receipts:
+            data.append([
+                f"Q-{r['quotation_id']}",
+                (r.get("vendor_name") or "—")[:20],
+                "Yes" if r.get("invoice_filename") else "—",
+                "Yes" if r.get("delivery_note_filename") else "—",
+                "Yes" if r.get("receipt_filename") else "—",
+                f"{float(r.get('total_amount') or 0):,.2f}",
+            ])
+        t = Table(data, colWidths=[40, 100, 60, 70, 55, 75])
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0d9488")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
+        ]))
+        story.append(t)
+    story.append(Spacer(1, 16))
+
+    story.append(Paragraph("5. AWARDED CONTRACT DETAIL", styles["Heading2"]))
+    if not awarded:
+        story.append(Paragraph("No contracts awarded yet.", styles["Normal"]))
+    else:
+        for r in awarded:
+            story.append(Paragraph(
+                f"<b>{r.get('service_name') or r.get('service_title') or 'Service'}</b> — "
+                f"Vendor: {r.get('vendor_name')} ({r.get('vendor_email') or '—'})<br/>"
+                f"Amount: ₦{float(r.get('total_amount') or 0):,.2f} &nbsp;|&nbsp; "
+                f"Tax: ₦{float(r.get('tax_amount') or 0):,.2f} &nbsp;|&nbsp; "
+                f"Awarded: {(r.get('awarded_at') or '')[:10]} &nbsp;|&nbsp; "
+                f"Stage: {r.get('procurement_stage') or '—'} &nbsp;|&nbsp; "
+                f"Vendor response: {r.get('vendor_offer_response') or 'pending'}",
+                styles["Normal"],
+            ))
+            story.append(Spacer(1, 6))
+
+    story.append(Spacer(1, 24))
+    story.append(Paragraph(
+        f"This report is issued for <b>{org['name']}</b> by Knowsoft eProcurement. "
+        f"Document generated on {today}.",
+        styles["Normal"],
+    ))
+    doc.build(story)
+    buffer.seek(0)
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in (org["name"] or "org"))[:30]
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=f"Full_Procurement_Report_{safe}_{datetime.now().strftime('%Y%m%d')}.pdf",
+        mimetype="application/pdf",
+    )
+
+
+@app.route("/admin/org/<int:org_id>/financial_excel")
+@login_required("admin")
+def org_financial_excel(org_id):
+    """Excel financial report for one recipient organization."""
+    if not require_org_access(org_id):
+        return redirect(url_for("admin_dashboard"), code=303)
+    conn = get_db()
+    org = conn.execute("SELECT * FROM organizations WHERE id=?", (org_id,)).fetchone()
+    conn.close()
+    if not org:
+        flash("Organization not found.", "danger")
+        return redirect(url_for("admin_organizations"), code=303)
+
+    records = _org_procurement_records(org_id)
+    rows = []
+    for r in records:
+        rows.append({
+            "Company": org["name"],
+            "Quotation ID": r["quotation_id"],
+            "Service": r.get("service_name") or r.get("service_title") or "",
+            "Vendor": r.get("vendor_name") or "",
+            "Vendor Email": r.get("vendor_email") or "",
+            "Vendor Phone": r.get("vendor_phone") or "",
+            "Qty": r.get("quantity") or 0,
+            "Unit Price": r.get("unit_price") or 0,
+            "Subtotal": r.get("subtotal") or 0,
+            "Tax Rate %": r.get("tax_rate") or 0,
+            "Tax Amount": r.get("tax_amount") or 0,
+            "Total Amount": r.get("total_amount") or 0,
+            "Award Status": r.get("award_status") or "",
+            "Submitted": (r.get("submitted_at") or "")[:19],
+            "Awarded At": (r.get("awarded_at") or "")[:19],
+            "LPO Issued": "Yes" if (r.get("lpo_available") or r.get("lpo_sent")) else "No",
+            "LPO Date": (r.get("lpo_sent_at") or "")[:19],
+            "Invoice on file": "Yes" if r.get("invoice_filename") else "No",
+            "Delivery note": "Yes" if r.get("delivery_note_filename") else "No",
+            "Receipt / voucher": "Yes" if r.get("receipt_filename") else "No",
+            "Stage": r.get("procurement_stage") or "",
+            "Progress %": r.get("progress_percent") or 0,
+            "Vendor offer response": r.get("vendor_offer_response") or "",
+        })
+
+    df = pd.DataFrame(rows)
+    # Summary sheet data
+    awarded = [r for r in records if (r.get("award_status") or "") == "awarded"]
+    summary = pd.DataFrame([
+        {"Metric": "Company", "Value": org["name"]},
+        {"Metric": "Total quotations", "Value": len(records)},
+        {"Metric": "Contracts awarded", "Value": len(awarded)},
+        {"Metric": "Total awarded value (₦)", "Value": sum(float(r.get("total_amount") or 0) for r in awarded)},
+        {"Metric": "LPOs issued", "Value": sum(1 for r in awarded if r.get("lpo_available") or r.get("lpo_sent"))},
+        {"Metric": "Receipts on file", "Value": sum(1 for r in records if r.get("receipt_filename"))},
+        {"Metric": "Report date", "Value": datetime.now().strftime("%Y-%m-%d %H:%M")},
+    ])
+
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        summary.to_excel(writer, index=False, sheet_name="Summary")
+        if df.empty:
+            pd.DataFrame([{"Note": "No procurement records yet"}]).to_excel(
+                writer, index=False, sheet_name="Transactions"
+            )
+        else:
+            df.to_excel(writer, index=False, sheet_name="Transactions")
+        # Awarded-only sheet
+        if awarded:
+            df[df["Award Status"] == "awarded"].to_excel(writer, index=False, sheet_name="Awarded")
+    buffer.seek(0)
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in (org["name"] or "org"))[:30]
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=f"Financial_Report_{safe}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
 
