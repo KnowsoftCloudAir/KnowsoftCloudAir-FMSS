@@ -21,7 +21,11 @@ from reportlab.lib import colors
 from reportlab.lib.units import inch
 
 app = Flask(__name__)
-app.secret_key = "Knowsoft-eProcurement-Secret-Key-Change-In-Production-2024"
+# Secrets from environment in production; fallbacks keep local/demo working
+app.secret_key = os.environ.get(
+    "SECRET_KEY",
+    "Knowsoft-eProcurement-Secret-Key-Change-In-Production-2024",
+)
 app.config["UPLOAD_FOLDER"] = "uploads"
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB
 
@@ -29,9 +33,9 @@ os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 os.makedirs("static", exist_ok=True)
 os.makedirs("instance", exist_ok=True)
 
-# Default admin credentials (user can change after first login)
-DEFAULT_ADMIN_PASSWORD = "Aidah@esemi"
-ADMIN_PASSWORD_HASH = generate_password_hash(DEFAULT_ADMIN_PASSWORD)
+# Default admin password: set DEFAULT_ADMIN_PASSWORD in the environment for production.
+# Fallback value is only used for first-run bootstrap / local demo.
+DEFAULT_ADMIN_PASSWORD = os.environ.get("DEFAULT_ADMIN_PASSWORD", "Aidah@esemi")
 
 ALLOWED_EXTENSIONS = {"pdf", "png", "jpg", "jpeg", "gif"}
 
@@ -375,6 +379,114 @@ def set_setting(key, value):
     conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
     conn.commit()
     conn.close()
+
+
+def parse_deadline(deadline_str):
+    """Parse service deadline text to datetime, or None if unparseable."""
+    if not deadline_str:
+        return None
+    s = str(deadline_str).strip()
+    candidates = [s]
+    if len(s) >= 19:
+        candidates.append(s[:19])
+    if len(s) >= 16:
+        candidates.append(s[:16])
+    if len(s) >= 10:
+        candidates.append(s[:10])
+    for candidate in candidates:
+        for fmt in (
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%dT%H:%M",
+            "%Y-%m-%d %H:%M",
+            "%Y-%m-%d",
+            "%d/%m/%Y",
+            "%d-%m-%Y",
+        ):
+            try:
+                return datetime.strptime(candidate, fmt)
+            except ValueError:
+                continue
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00").replace("+00:00", ""))
+    except Exception:
+        return None
+
+
+def is_deadline_passed(deadline_str):
+    dl = parse_deadline(deadline_str)
+    if not dl:
+        return False
+    # If only a date was given, treat end of that day as cutoff
+    if dl.hour == 0 and dl.minute == 0 and dl.second == 0 and "T" not in str(deadline_str) and " " not in str(deadline_str):
+        dl = dl.replace(hour=23, minute=59, second=59)
+    return datetime.now() > dl
+
+
+def service_has_award(conn, service_id):
+    row = conn.execute(
+        "SELECT id FROM quotations WHERE service_id=? AND award_status='awarded' LIMIT 1",
+        (service_id,),
+    ).fetchone()
+    return bool(row)
+
+
+def is_service_open_for_quotes(service, conn=None):
+    """True if vendors may still select / quote on this service."""
+    if not service:
+        return False
+    if not service["is_active"]:
+        return False
+    stage = service["procurement_stage"] if "procurement_stage" in service.keys() else "open"
+    if stage in ("vendor_selected", "in_progress", "completed"):
+        return False
+    if is_deadline_passed(service["deadline"] if "deadline" in service.keys() else None):
+        return False
+    close_conn = False
+    if conn is None:
+        conn = get_db()
+        close_conn = True
+    awarded = service_has_award(conn, service["id"])
+    if close_conn:
+        conn.close()
+    return not awarded
+
+
+def close_expired_and_awarded_services(conn=None):
+    """Mark services inactive when deadline passed or already awarded (idempotent)."""
+    close_conn = False
+    if conn is None:
+        conn = get_db()
+        close_conn = True
+    rows = conn.execute(
+        "SELECT id, deadline, is_active, procurement_stage FROM services WHERE is_active=1"
+    ).fetchall()
+    for s in rows:
+        should_close = False
+        if is_deadline_passed(s["deadline"]):
+            should_close = True
+        elif service_has_award(conn, s["id"]):
+            should_close = True
+        elif (s["procurement_stage"] or "") in ("vendor_selected", "in_progress", "completed"):
+            should_close = True
+        if should_close:
+            conn.execute(
+                "UPDATE services SET is_active=0 WHERE id=? AND is_active=1",
+                (s["id"],),
+            )
+    conn.commit()
+    if close_conn:
+        conn.close()
+
+
+@app.context_processor
+def inject_globals():
+    """Make app branding available in every template."""
+    return {
+        "app_logo": get_setting("app_logo_filename", ""),
+        "app_title": get_setting("app_title", "Knowsoft eProcurement"),
+        "now": datetime.now,
+    }
 
 
 def login_required(role=None):
@@ -864,12 +976,15 @@ def vendor_download_lpo(quotation_id):
 @login_required("vendor")
 def vendor_quotation():
     conn = get_db()
+    close_expired_and_awarded_services(conn)
     vendor = conn.execute("SELECT * FROM vendors WHERE id=?", (session["vendor_id"],)).fetchone()
     org = conn.execute("SELECT * FROM organizations WHERE id=?", (vendor["organization_id"],)).fetchone()
-    services = conn.execute(
+    all_services = conn.execute(
         "SELECT * FROM services WHERE organization_id=? AND is_active=1 ORDER BY title",
         (vendor["organization_id"],),
     ).fetchall()
+    # Only services still open for quotes (not awarded, deadline not passed)
+    services = [s for s in all_services if is_service_open_for_quotes(s, conn)]
 
     if request.method == "POST":
         service_id = request.form.get("service_id")
@@ -886,11 +1001,19 @@ def vendor_quotation():
             conn.close()
             return redirect(url_for("vendor_quotation"))
 
+        service = conn.execute("SELECT * FROM services WHERE id=?", (service_id,)).fetchone()
+        if not service or not is_service_open_for_quotes(service, conn):
+            flash(
+                "This procurement activity is no longer open for quotations "
+                "(awarded or deadline reached).",
+                "danger",
+            )
+            conn.close()
+            return redirect(url_for("vendor_quotation"), code=303)
+
         subtotal = unit_price * quantity
         tax_amount = subtotal * (tax_rate / 100.0)
         total = subtotal + tax_amount
-
-        service = conn.execute("SELECT * FROM services WHERE id=?", (service_id,)).fetchone()
         service_title = service["title"] if service else ""
 
         invoice_filename = None
@@ -1047,6 +1170,51 @@ def admin_logout():
     for k in ("admin", "admin_id", "admin_username", "admin_role", "admin_must_change"):
         session.pop(k, None)
     return redirect(url_for("index"))
+
+
+@app.route("/admin/branding", methods=["GET", "POST"])
+@login_required("super_admin")
+def admin_branding():
+    """General admin can upload app title-bar logo and set display title."""
+    if request.method == "POST":
+        title = request.form.get("app_title", "").strip()
+        if title:
+            set_setting("app_title", title[:80])
+        logo = request.files.get("app_logo")
+        if logo and logo.filename and allowed_file(logo.filename):
+            fname = secure_filename(logo.filename)
+            logo_fn = f"app_logo_{datetime.now().strftime('%Y%m%d%H%M%S')}_{fname}"
+            logo.save(os.path.join("static", logo_fn))
+            # remove previous logo file if present
+            old = get_setting("app_logo_filename", "")
+            if old and old != logo_fn:
+                try:
+                    op = os.path.join("static", old)
+                    if os.path.isfile(op):
+                        os.remove(op)
+                except Exception:
+                    pass
+            set_setting("app_logo_filename", logo_fn)
+            flash("App logo updated.", "success")
+        elif request.form.get("remove_logo") == "1":
+            old = get_setting("app_logo_filename", "")
+            if old:
+                try:
+                    op = os.path.join("static", old)
+                    if os.path.isfile(op):
+                        os.remove(op)
+                except Exception:
+                    pass
+            set_setting("app_logo_filename", "")
+            flash("App logo removed.", "info")
+        else:
+            flash("Branding settings saved.", "success")
+        return redirect(url_for("admin_branding"), code=303)
+    return render_template(
+        "admin_branding.html",
+        app_logo=get_setting("app_logo_filename", ""),
+        app_title=get_setting("app_title", "Knowsoft eProcurement"),
+    )
 
 
 # ---------------------------------------------------------
@@ -1842,39 +2010,49 @@ def admin_add_service(org_id):
         )
         conn.commit()
 
-        # Feature 3: all approved (prelisted) vendors of this org receive a notification
+        # Notify all prelisted (approved) vendors for this organization
         vendors = conn.execute(
-            "SELECT id, name, email FROM vendors WHERE organization_id=? AND is_approved=1",
+            """SELECT id, name, email FROM vendors
+               WHERE organization_id=? AND (is_approved=1 OR is_approved IS NULL)""",
             (org_id,),
         ).fetchall()
         notified = 0
+        failed = 0
         for v in vendors:
-            if v["email"]:
-                body = (
-                    f"Dear {v['name']},\n\n"
-                    f"A new service opportunity has been published by {org_name}.\n\n"
-                    f"Service: {title}\n"
-                )
-                if specification:
-                    body += f"Specification: {specification[:300]}{'…' if len(specification) > 300 else ''}\n"
-                if deadline:
-                    body += f"Deadline: {deadline}\n"
-                body += (
-                    f"\nYou are on the prelisted vendor list for this organization.\n"
-                    f"Please log in to the eProcurement portal to view details and submit a quotation.\n\n"
-                    f"Regards,\n{org_name}\nKnowsoft eProcurement"
-                )
+            email = (v["email"] or "").strip()
+            if not email:
+                failed += 1
+                continue
+            body = (
+                f"Dear {v['name']},\n\n"
+                f"A new service opportunity has been published by {org_name}.\n\n"
+                f"Service: {title}\n"
+            )
+            if specification:
+                body += f"Specification: {specification[:300]}{'…' if len(specification) > 300 else ''}\n"
+            if deadline:
+                body += f"Deadline: {deadline}\n"
+            body += (
+                f"\nYou are on the prelisted vendor list for this organization.\n"
+                f"Please log in to the eProcurement portal to view details and submit a quotation.\n\n"
+                f"Regards,\n{org_name}\nKnowsoft eProcurement"
+            )
+            try:
                 send_email_simulation(
-                    v["email"],
+                    email,
                     f"New Service Opportunity – {title}",
                     body,
                 )
                 notified += 1
+            except Exception:
+                failed += 1
         conn.close()
-        flash(
-            f"Service added. {notified} prelisted vendor(s) notified.",
-            "success",
-        )
+        msg = f"Service added. Notification sent to {notified} prelisted vendor(s)."
+        if failed:
+            msg += f" ({failed} could not be notified — missing email.)"
+        if notified == 0 and failed == 0:
+            msg = "Service added. No prelisted vendors found to notify yet."
+        flash(msg, "success")
     return redirect(url_for("admin_org_detail", org_id=org_id), code=303)
 
 
@@ -1965,14 +2143,15 @@ def admin_award_contract(quotation_id):
         flash("You do not have permission to manage this organization.", "danger")
         return redirect(url_for("admin_dashboard"), code=303)
 
-    # Clear previous awards on same service
+    # Clear previous awards on same service and close it so it cannot be selected again
     if q["service_id"]:
         conn.execute(
             "UPDATE quotations SET award_status='none', lpo_available=0 WHERE service_id=? AND id!=?",
             (q["service_id"], quotation_id),
         )
         conn.execute(
-            "UPDATE services SET procurement_stage=?, progress_percent=?, awarded_quotation_id=? WHERE id=?",
+            """UPDATE services SET procurement_stage=?, progress_percent=?, awarded_quotation_id=?,
+               is_active=0 WHERE id=?""",
             (
                 "vendor_selected",
                 STAGE_META["vendor_selected"]["percent"],

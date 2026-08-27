@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}App Branding{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2 class="mb-0"><i class="bi bi-palette me-2"></i>App Branding</h2>
+    <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-secondary">Back to Dashboard</a>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-6">
+        <div class="card p-4">
+            <h5 class="mb-3">Title bar logo &amp; name</h5>
+            <p class="text-muted small">
+                The logo appears in the navigation bar and on the landing page.
+                Recommended: PNG or JPG, transparent background, about 200×60 px.
+            </p>
+            <form method="POST" enctype="multipart/form-data">
+                <div class="mb-3">
+                    <label class="form-label">App title</label>
+                    <input type="text" name="app_title" class="form-control" value="{{ app_title }}" maxlength="80">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Upload logo</label>
+                    <input type="file" name="app_logo" class="form-control" accept="image/*">
+                </div>
+                {% if app_logo %}
+                <div class="mb-3 p-3 rounded" style="background:#f1f5f9;">
+                    <div class="small text-muted mb-2">Current logo</div>
+                    <img src="{{ url_for('static', filename=app_logo) }}" alt="Current logo" style="max-height:48px;">
+                </div>
+                <div class="form-check mb-3">
+                    <input class="form-check-input" type="checkbox" name="remove_logo" value="1" id="rmLogo">
+                    <label class="form-check-label" for="rmLogo">Remove current logo</label>
+                </div>
+                {% endif %}
+                <button type="submit" class="btn btn-primary">Save branding</button>
+            </form>
+        </div>
+    </div>
+    <div class="col-lg-6">
+        <div class="card p-4">
+            <h5 class="mb-3">Preview</h5>
+            <div class="rounded p-3 text-white" style="background:linear-gradient(120deg,#0f2744,#2b6cb0);">
+                <div class="d-flex align-items-center gap-2">
+                    {% if app_logo %}
+                    <img src="{{ url_for('static', filename=app_logo) }}" style="height:36px;border-radius:6px;background:rgba(255,255,255,0.12);padding:2px 6px;">
+                    {% else %}
+                    <i class="bi bi-building-gear fs-4"></i>
+                    {% endif %}
+                    <strong>{{ app_title }}</strong>
+                </div>
+            </div>
+            <p class="text-muted small mt-3 mb-0">Only the general administrator can change branding.</p>
+        </div>
+    </div>
+</div>
+{% endblock %}

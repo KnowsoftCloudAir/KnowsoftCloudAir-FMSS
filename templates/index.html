@@ -1,49 +1,122 @@
 {% extends "base.html" %}
-{% block title %}Welcome – Knowsoft eProcurement{% endblock %}
+{% block title %}Welcome – {{ app_title or 'Knowsoft eProcurement' }}{% endblock %}
+{% block extra_css %}
+.landing-hero {
+    background: linear-gradient(135deg, #0f2744 0%, #1a365d 40%, #2b6cb0 100%);
+    color: white;
+    padding: 3.25rem 1.5rem 3.5rem;
+    border-radius: 20px;
+    position: relative;
+    overflow: hidden;
+    margin-bottom: 0;
+    box-shadow: 0 20px 50px rgba(15, 39, 68, 0.25);
+}
+.landing-hero::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+        radial-gradient(circle at 15% 85%, rgba(246, 224, 94, 0.18), transparent 40%),
+        radial-gradient(circle at 90% 15%, rgba(66, 153, 225, 0.3), transparent 40%);
+    pointer-events: none;
+}
+.landing-hero .inner { position: relative; z-index: 1; }
+.feature-icon {
+    width: 56px; height: 56px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 14px;
+    background: linear-gradient(135deg, #ebf4ff, #dbeafe);
+    color: var(--accent);
+    margin-bottom: 1rem;
+}
+{% endblock %}
 {% block content %}
-<div class="hero text-center mb-5">
-    <div class="container">
-        <h1 class="display-5 fw-bold mb-3"><i class="bi bi-building-gear"></i> Knowsoft eProcurement</h1>
-        <p class="lead mb-0">Select the recipient organization you wish to contact</p>
+<div class="landing-hero text-center mb-4">
+    <div class="inner">
+        <span class="badge bg-warning text-dark mb-3 px-3 py-2 fw-semibold">Transparent · Fair · Professional</span>
+        <h1 class="display-5 fw-bold mb-3" style="letter-spacing:-0.03em;">
+            {% if app_logo %}
+            <img src="{{ url_for('static', filename=app_logo) }}" alt=""
+                 style="height:48px;vertical-align:middle;margin-right:12px;border-radius:10px;background:rgba(255,255,255,0.15);padding:4px 8px;">
+            {% else %}
+            <i class="bi bi-building-gear me-2"></i>
+            {% endif %}
+            {{ app_title or 'Knowsoft eProcurement' }}
+        </h1>
+        <p class="lead mb-0 mx-auto" style="max-width:620px;opacity:0.95;font-size:1.1rem;">
+            Welcome. Connect recipient organizations, prelisted vendors, and procurement committees
+            in one secure workflow — from opportunity to award.
+        </p>
     </div>
 </div>
 
 <div class="row justify-content-center">
-    <div class="col-md-8 col-lg-6">
-        <div class="card p-4">
-            <h5 class="card-title mb-4 text-center">Choose Recipient Organization</h5>
+    <div class="col-lg-7 col-xl-6">
+        <div class="card p-4 p-md-5">
+            <div class="text-center mb-4">
+                <div class="feature-icon mx-auto"><i class="bi bi-building fs-4"></i></div>
+                <h4 class="fw-bold mb-1">Open a Recipient Portal</h4>
+                <p class="text-muted small mb-0">Select the organization you wish to engage with.</p>
+            </div>
             {% if organizations %}
             <form method="POST" action="{{ url_for('select_org') }}">
-                <div class="mb-3">
-                    <label class="form-label required">Organization</label>
+                <div class="mb-4">
+                    <label class="form-label required">Recipient organization</label>
                     <select name="organization_id" class="form-select form-select-lg" required>
-                        <option value="">-- Select Organization --</option>
+                        <option value="">— Choose organization —</option>
                         {% for org in organizations %}
                         <option value="{{ org.id }}">{{ org.name }}</option>
                         {% endfor %}
                     </select>
                 </div>
                 <div class="d-grid">
-                    <button type="submit" class="btn btn-primary btn-lg">
+                    <button type="submit" class="btn btn-primary btn-lg py-3">
                         <i class="bi bi-box-arrow-in-right me-2"></i>Open Portal
                     </button>
                 </div>
             </form>
             {% else %}
-            <div class="alert alert-info mb-0">No organizations registered yet. Please contact the administrator or register below.</div>
+            <div class="alert alert-info mb-0 text-center">
+                No organizations are listed yet. Register below or contact the administrator.
+            </div>
             {% endif %}
 
-            <hr class="my-4">
+            <div class="text-center my-4"><span class="text-muted small">— or —</span></div>
             <div class="text-center">
-                <p class="text-muted small mb-2">Is your organization not listed? Join as a recipient organization.</p>
+                <p class="text-muted small mb-2">Organization not listed?</p>
                 <a href="{{ url_for('register_org') }}" class="btn btn-outline-primary">
                     <i class="bi bi-building-add me-2"></i>Register New Client Organization
                 </a>
             </div>
         </div>
-        <p class="text-center text-muted mt-3 small">
-            <i class="bi bi-shield-lock"></i> Admin access available via the shield icon in the top bar
-        </p>
+    </div>
+</div>
+
+<div class="row g-4 mt-4">
+    <div class="col-md-4">
+        <div class="card h-100 p-4 text-center">
+            <div class="feature-icon mx-auto"><i class="bi bi-file-earmark-text fs-4"></i></div>
+            <h5 class="fw-bold">Submit quotations</h5>
+            <p class="text-muted small mb-0">Respond to open services with pricing, documents, and formal consent.</p>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card h-100 p-4 text-center">
+            <div class="feature-icon mx-auto" style="background:linear-gradient(135deg,#e6fffa,#b2f5ea);color:#0d9488;">
+                <i class="bi bi-people fs-4"></i>
+            </div>
+            <h5 class="fw-bold">Committee evaluation</h5>
+            <p class="text-muted small mb-0">Independent scoring against criteria with transparent ranking.</p>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card h-100 p-4 text-center">
+            <div class="feature-icon mx-auto" style="background:linear-gradient(135deg,#fefcbf,#faf089);color:#b7791f;">
+                <i class="bi bi-award fs-4"></i>
+            </div>
+            <h5 class="fw-bold">Award &amp; progress</h5>
+            <p class="text-muted small mb-0">Awards close the opportunity so it cannot be selected again.</p>
+        </div>
     </div>
 </div>
 {% endblock %}

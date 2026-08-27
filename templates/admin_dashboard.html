@@ -20,6 +20,9 @@
             <span class="badge bg-danger">{{ pending_org_requests }}</span>
             {% endif %}
         </a>
+        <a href="{{ url_for('admin_branding') }}" class="btn btn-outline-secondary me-2">
+            <i class="bi bi-palette"></i> Branding
+        </a>
         <a href="{{ url_for('admin_sub_admins') }}" class="btn btn-outline-warning me-2">
             <i class="bi bi-people"></i> Sub-Admins
         </a>
