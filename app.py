@@ -127,6 +127,21 @@ def init_db():
             winning_vendor_id INTEGER, lpo_sent INTEGER DEFAULT 0, lpo_sent_at TEXT,
             delivery_status TEXT DEFAULT 'pending', certificate_issued INTEGER DEFAULT 0,
             closed INTEGER DEFAULT 0, notes TEXT)""",
+        """CREATE TABLE IF NOT EXISTS org_registration_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            logo_filename TEXT,
+            address TEXT,
+            contact_email TEXT NOT NULL,
+            contact_phone TEXT,
+            description TEXT,
+            status TEXT DEFAULT 'pending',
+            admin_notes TEXT,
+            reviewed_by INTEGER,
+            reviewed_at TEXT,
+            created_org_id INTEGER,
+            created_admin_id INTEGER,
+            created_at TEXT)""",
     ]
     for sql in ddl:
         try:
@@ -231,6 +246,27 @@ def ensure_extra_columns():
                 assigned_at TEXT,
                 deactivated_at TEXT,
                 UNIQUE(admin_id, organization_id))"""
+        )
+    except Exception:
+        pass
+    # Org self-registration requests (public form → general admin review)
+    try:
+        _exec_sql(
+            """CREATE TABLE IF NOT EXISTS org_registration_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                logo_filename TEXT,
+                address TEXT,
+                contact_email TEXT NOT NULL,
+                contact_phone TEXT,
+                description TEXT,
+                status TEXT DEFAULT 'pending',
+                admin_notes TEXT,
+                reviewed_by INTEGER,
+                reviewed_at TEXT,
+                created_org_id INTEGER,
+                created_admin_id INTEGER,
+                created_at TEXT)"""
         )
     except Exception:
         pass
@@ -510,6 +546,75 @@ def org_portal():
         flash("Organization not found.", "danger")
         return redirect(url_for("index"))
     return render_template("org_portal.html", org=org)
+
+
+@app.route("/register_org", methods=["GET", "POST"])
+def register_org():
+    """Public form for a new recipient organization to request registration."""
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        contact_email = request.form.get("contact_email", "").strip().lower()
+        if not name or not contact_email:
+            flash("Organization name and contact email are required.", "danger")
+            return redirect(url_for("register_org"), code=303)
+
+        logo_fn = None
+        logo = request.files.get("logo")
+        if logo and logo.filename and allowed_file(logo.filename):
+            fname = secure_filename(logo.filename)
+            logo_fn = f"req_logo_{datetime.now().strftime('%Y%m%d%H%M%S')}_{fname}"
+            logo.save(os.path.join("static", logo_fn))
+
+        conn = get_db()
+        # Soft check: warn if email already used by an org or admin, but still accept request
+        existing_org = conn.execute(
+            "SELECT id FROM organizations WHERE lower(contact_email)=?", (contact_email,)
+        ).fetchone()
+        existing_admin = conn.execute(
+            "SELECT id FROM admin_users WHERE lower(username)=?", (contact_email,)
+        ).fetchone()
+        if existing_org or existing_admin:
+            flash(
+                "Note: this email is already associated with an existing account. "
+                "The general administrator will review your request.",
+                "warning",
+            )
+
+        conn.execute(
+            """INSERT INTO org_registration_requests
+               (name, logo_filename, address, contact_email, contact_phone, description, status, created_at)
+               VALUES (?,?,?,?,?,?, 'pending', ?)""",
+            (
+                name,
+                logo_fn,
+                request.form.get("address", "").strip(),
+                contact_email,
+                request.form.get("contact_phone", "").strip(),
+                request.form.get("description", "").strip(),
+                datetime.now().isoformat(),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        # Simulated confirmation email to the requester
+        send_email_simulation(
+            contact_email,
+            "Knowsoft eProcurement – Registration Request Received",
+            f"Dear {name},\n\n"
+            "We have received your request to join as a recipient organization on Knowsoft eProcurement.\n"
+            "Please check your email within 24 hours for a confirmation email and other details.\n\n"
+            "Thank you,\nKnowsoft eProcurement Team",
+        )
+
+        flash(
+            "Your registration request has been submitted. "
+            "Please check your email within 24 hours for a confirmation email and other details.",
+            "success",
+        )
+        return redirect(url_for("index"), code=303)
+
+    return render_template("org_register.html")
 
 
 # ---------------------------------------------------------
@@ -1107,6 +1212,14 @@ def admin_dashboard():
             for oid in allowed_orgs:
                 rankings.extend(get_final_rankings(organization_id=oid))
             rankings.sort(key=lambda x: x["final_score"], reverse=True)
+    pending_org_requests = 0
+    if is_super_admin():
+        try:
+            pending_org_requests = conn.execute(
+                "SELECT COUNT(*) FROM org_registration_requests WHERE status='pending'"
+            ).fetchone()[0]
+        except Exception:
+            pending_org_requests = 0
     conn.close()
     return render_template(
         "admin_dashboard.html",
@@ -1119,6 +1232,7 @@ def admin_dashboard():
         is_super=is_super_admin(),
         admin_role=session.get("admin_role", "super"),
         admin_username=session.get("admin_username", "admin"),
+        pending_org_requests=pending_org_requests,
     )
 
 def get_quarterly_completed(organization_id=None, year=None, quarter=None):
@@ -1260,6 +1374,164 @@ def admin_organizations():
         "admin_organizations.html",
         orgs=orgs,
         is_super=is_super_admin(),
+    )
+
+
+@app.route("/admin/org_requests", methods=["GET", "POST"])
+@login_required("super_admin")
+def admin_org_requests():
+    """General admin reviews public requests to register as a recipient organization.
+    On approve: create organization + sub-admin account (username = contact email)
+    and assign the org to that sub-admin so they can manage their procurement system.
+    """
+    conn = get_db()
+    if request.method == "POST":
+        action = request.form.get("action")
+        req_id = request.form.get("request_id")
+        req = conn.execute(
+            "SELECT * FROM org_registration_requests WHERE id=?", (req_id,)
+        ).fetchone()
+        if not req or req["status"] != "pending":
+            flash("Request not found or already processed.", "warning")
+            conn.close()
+            return redirect(url_for("admin_org_requests"), code=303)
+
+        admin_notes = request.form.get("admin_notes", "").strip()
+        reviewer_id = session.get("admin_id")
+
+        if action == "reject":
+            conn.execute(
+                """UPDATE org_registration_requests
+                   SET status='rejected', admin_notes=?, reviewed_by=?, reviewed_at=?
+                   WHERE id=?""",
+                (admin_notes, reviewer_id, datetime.now().isoformat(), req_id),
+            )
+            conn.commit()
+            send_email_simulation(
+                req["contact_email"],
+                "Knowsoft eProcurement – Registration Request Update",
+                f"Dear {req['name']},\n\n"
+                "We regret to inform you that your request to join as a recipient organization "
+                "has not been approved at this time.\n"
+                f"{('Notes: ' + admin_notes) if admin_notes else ''}\n\n"
+                "You may contact the administrator for further clarification.\n\n"
+                "Knowsoft eProcurement Team",
+            )
+            flash("Request rejected. Notification email simulated.", "info")
+
+        elif action == "approve":
+            password = request.form.get("password", "").strip()
+            if not password or len(password) < 6:
+                flash("Please set a password of at least 6 characters for the new client account.", "danger")
+                conn.close()
+                return redirect(url_for("admin_org_requests"), code=303)
+
+            email = (req["contact_email"] or "").strip().lower()
+            # Ensure username (email) is free
+            existing = conn.execute(
+                "SELECT id FROM admin_users WHERE lower(username)=?", (email,)
+            ).fetchone()
+            if existing:
+                flash(
+                    f"Cannot approve: an admin account with username '{email}' already exists. "
+                    "Reject or ask the requester to use a different email.",
+                    "danger",
+                )
+                conn.close()
+                return redirect(url_for("admin_org_requests"), code=303)
+
+            # 1. Create organization
+            cur = conn.execute(
+                """INSERT INTO organizations
+                   (name, logo_filename, address, contact_email, contact_phone, description, is_active, created_at)
+                   VALUES (?,?,?,?,?,?,1,?)""",
+                (
+                    req["name"],
+                    req["logo_filename"],
+                    req["address"],
+                    email,
+                    req["contact_phone"],
+                    req["description"],
+                    datetime.now().isoformat(),
+                ),
+            )
+            org_id = cur.lastrowid
+
+            # 2. Create sub-admin account (login = contact email)
+            cur = conn.execute(
+                """INSERT INTO admin_users
+                   (username, password_hash, role, full_name, is_active, must_change_password, created_at)
+                   VALUES (?, ?, 'sub', ?, 1, 1, ?)""",
+                (
+                    email,
+                    generate_password_hash(password),
+                    req["name"],
+                    datetime.now().isoformat(),
+                ),
+            )
+            new_admin_id = cur.lastrowid
+
+            # 3. Assign org to this sub-admin
+            conn.execute(
+                """INSERT INTO admin_org_assignments
+                   (admin_id, organization_id, is_active, assigned_by, assigned_at)
+                   VALUES (?, ?, 1, ?, ?)""",
+                (new_admin_id, org_id, reviewer_id, datetime.now().isoformat()),
+            )
+
+            # 4. Mark request approved
+            conn.execute(
+                """UPDATE org_registration_requests
+                   SET status='approved', admin_notes=?, reviewed_by=?, reviewed_at=?,
+                       created_org_id=?, created_admin_id=?
+                   WHERE id=?""",
+                (
+                    admin_notes,
+                    reviewer_id,
+                    datetime.now().isoformat(),
+                    org_id,
+                    new_admin_id,
+                    req_id,
+                ),
+            )
+            conn.commit()
+
+            # 5. Simulate sending credentials
+            send_email_simulation(
+                email,
+                "Knowsoft eProcurement – Your Organization Account is Ready",
+                f"Dear {req['name']},\n\n"
+                "Your request to join as a recipient organization has been approved.\n\n"
+                "Login details for the organization admin portal:\n"
+                f"  Username (email): {email}\n"
+                f"  Temporary password: {password}\n\n"
+                "Please log in at the Admin section of the portal and change your password on first login.\n"
+                "You will be able to manage your organization's procurement system (services, vendors, "
+                "committee, quotations) as a client administrator.\n\n"
+                f"{('Notes from administrator: ' + admin_notes) if admin_notes else ''}\n"
+                "Welcome aboard!\n\n"
+                "Knowsoft eProcurement Team",
+            )
+            flash(
+                f"Approved. Organization '{req['name']}' created and sub-admin account "
+                f"({email}) provisioned. Credentials email simulated.",
+                "success",
+            )
+
+        conn.close()
+        return redirect(url_for("admin_org_requests"), code=303)
+
+    pending = conn.execute(
+        "SELECT * FROM org_registration_requests WHERE status='pending' ORDER BY created_at DESC"
+    ).fetchall()
+    processed = conn.execute(
+        "SELECT * FROM org_registration_requests WHERE status!='pending' ORDER BY reviewed_at DESC LIMIT 50"
+    ).fetchall()
+    conn.close()
+    return render_template(
+        "admin_org_requests.html",
+        pending=pending,
+        processed=processed,
     )
 
 

@@ -30,8 +30,16 @@
                 </div>
             </form>
             {% else %}
-            <div class="alert alert-info mb-0">No organizations registered yet. Please contact the administrator.</div>
+            <div class="alert alert-info mb-0">No organizations registered yet. Please contact the administrator or register below.</div>
             {% endif %}
+
+            <hr class="my-4">
+            <div class="text-center">
+                <p class="text-muted small mb-2">Is your organization not listed? Join as a recipient organization.</p>
+                <a href="{{ url_for('register_org') }}" class="btn btn-outline-primary">
+                    <i class="bi bi-building-add me-2"></i>Register New Client Organization
+                </a>
+            </div>
         </div>
         <p class="text-center text-muted mt-3 small">
             <i class="bi bi-shield-lock"></i> Admin access available via the shield icon in the top bar

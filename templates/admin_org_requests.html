@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}Organization Registration Requests{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2 class="mb-0"><i class="bi bi-inbox me-2"></i>Organization Registration Requests</h2>
+    <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-secondary">Back to Dashboard</a>
+</div>
+
+<div class="alert alert-info">
+    <i class="bi bi-info-circle me-1"></i>
+    Approving a request creates the recipient organization and a <strong>sub-admin</strong> account
+    (username = contact email). You set the temporary password; credentials are simulated via email log.
+</div>
+
+<h4 class="mb-3">Pending Requests
+    <span class="badge bg-warning text-dark">{{ pending|length }}</span>
+</h4>
+
+{% if pending %}
+<div class="row g-4 mb-5">
+    {% for r in pending %}
+    <div class="col-lg-6">
+        <div class="card h-100">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                <strong>{{ r.name }}</strong>
+                <span class="badge bg-warning text-dark">Pending</span>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-8">
+                        <p class="mb-1"><strong>Email:</strong> {{ r.contact_email }}</p>
+                        <p class="mb-1"><strong>Phone:</strong> {{ r.contact_phone or '—' }}</p>
+                        <p class="mb-1"><strong>Address:</strong> {{ r.address or '—' }}</p>
+                        <p class="mb-1"><strong>Submitted:</strong> {{ r.created_at[:19] if r.created_at else '—' }}</p>
+                        {% if r.description %}
+                        <p class="mb-0 small text-muted">{{ r.description }}</p>
+                        {% endif %}
+                    </div>
+                    <div class="col-md-4 text-center">
+                        {% if r.logo_filename %}
+                        <img src="{{ url_for('static', filename=r.logo_filename) }}"
+                             alt="Logo" class="img-fluid rounded" style="max-height:80px">
+                        {% else %}
+                        <div class="text-muted small">No logo</div>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <hr>
+                <form method="POST" class="row g-2">
+                    <input type="hidden" name="request_id" value="{{ r.id }}">
+                    <div class="col-12">
+                        <label class="form-label">Admin notes (optional)</label>
+                        <input type="text" name="admin_notes" class="form-control form-control-sm"
+                               placeholder="Internal or message to requester">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label required">Temporary password for client</label>
+                        <input type="text" name="password" class="form-control form-control-sm"
+                               minlength="6" placeholder="Min. 6 characters"
+                               title="Required only when approving">
+                    </div>
+                    <div class="col-md-6 d-flex align-items-end gap-2">
+                        <button type="submit" name="action" value="approve"
+                                class="btn btn-success btn-sm flex-grow-1"
+                                onclick="return confirm('Approve and create organization + sub-admin account?')">
+                            <i class="bi bi-check-lg"></i> Approve
+                        </button>
+                        <button type="submit" name="action" value="reject"
+                                class="btn btn-outline-danger btn-sm flex-grow-1"
+                                onclick="return confirm('Reject this registration request?')">
+                            <i class="bi bi-x-lg"></i> Reject
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="card p-4 mb-5 text-center text-muted">
+    No pending registration requests.
+</div>
+{% endif %}
+
+<h4 class="mb-3">Recently Processed</h4>
+<div class="card">
+    <div class="table-responsive">
+        <table class="table table-sm mb-0">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Email</th>
+                    <th>Status</th>
+                    <th>Reviewed</th>
+                    <th>Notes</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in processed %}
+                <tr>
+                    <td>{{ r.name }}</td>
+                    <td>{{ r.contact_email }}</td>
+                    <td>
+                        {% if r.status == 'approved' %}
+                        <span class="badge bg-success">Approved</span>
+                        {% else %}
+                        <span class="badge bg-secondary">Rejected</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ r.reviewed_at[:19] if r.reviewed_at else '—' }}</td>
+                    <td class="small text-muted">{{ r.admin_notes or '—' }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="5" class="text-center text-muted">No processed requests yet</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

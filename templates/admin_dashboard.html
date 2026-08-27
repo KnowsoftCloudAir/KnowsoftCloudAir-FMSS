@@ -14,6 +14,12 @@
             <i class="bi bi-building"></i> Organizations
         </a>
         {% if is_super %}
+        <a href="{{ url_for('admin_org_requests') }}" class="btn btn-outline-success me-2">
+            <i class="bi bi-inbox"></i> Org Requests
+            {% if pending_org_requests %}
+            <span class="badge bg-danger">{{ pending_org_requests }}</span>
+            {% endif %}
+        </a>
         <a href="{{ url_for('admin_sub_admins') }}" class="btn btn-outline-warning me-2">
             <i class="bi bi-people"></i> Sub-Admins
         </a>
