@@ -15,7 +15,7 @@ from functools import wraps
 import pandas as pd
 from io import BytesIO
 from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 from reportlab.lib.units import inch
@@ -270,6 +270,37 @@ def ensure_extra_columns():
                 reviewed_at TEXT,
                 created_org_id INTEGER,
                 created_admin_id INTEGER,
+                created_at TEXT)"""
+        )
+    except Exception:
+        pass
+    # FACE workflow: packages + authorizing officers
+    try:
+        _exec_sql(
+            """CREATE TABLE IF NOT EXISTS face_users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                full_name TEXT,
+                title TEXT,
+                signature_file TEXT,
+                stamp_file TEXT,
+                is_active INTEGER DEFAULT 1,
+                created_at TEXT)"""
+        )
+        _exec_sql(
+            """CREATE TABLE IF NOT EXISTS face_packages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mode TEXT NOT NULL,
+                title TEXT,
+                status TEXT DEFAULT 'draft',
+                data_json TEXT,
+                preparer_name TEXT,
+                prepared_at TEXT,
+                ready_at TEXT,
+                authorized_by INTEGER,
+                authorized_at TEXT,
+                authorizer_note TEXT,
                 created_at TEXT)"""
         )
     except Exception:
@@ -2923,6 +2954,854 @@ def committee_upload_signature():
         conn.close()
         flash("Signature uploaded.", "success")
     return redirect(url_for("committee_score"))
+
+
+
+
+# ---------------------------------------------------------
+# FACE FORM (UNICEF-style Funding Authorization package)
+# Role-based: Preparer → marks Ready → Authorizing Officer signs
+# Cover letter (A) + FACE form (B) + Annex 4 itemized (C)
+# ---------------------------------------------------------
+import json as _json_face
+
+DEFAULT_FACE_ACTIVITIES = [
+    {"code": ".A.", "name": "Leadership, Management and Coordination"},
+    {"code": ".B.", "name": "Demand Generation"},
+    {"code": ".C.", "name": "Human Resource for Health"},
+    {"code": ".D.", "name": "Service Delivery"},
+    {"code": ".E.", "name": "Supply Chain"},
+    {"code": ".F.", "name": "Health Financing"},
+    {"code": ".G.", "name": "Health Information Management System"},
+]
+
+
+def _empty_face_data(mode):
+    data = {
+        "mode": mode,
+        "org_name": "",
+        "org_address": "",
+        "org_email": "",
+        "ref_no": "",
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "addressee_title": "Chief of Field Office,",
+        "addressee_office": "UNICEF Field Office,",
+        "addressee_city": "",
+        "subject": "",
+        "signatory_name": "",
+        "signatory_title": "Executive Secretary",
+        "un_agency": "UNICEF",
+        "country": "NIGERIA",
+        "programme_code_title": "",
+        "project_code_title": "",
+        "responsible_officer": "",
+        "implementing_partner": "",
+        "currency": "Naira (N)",
+        "request_type": "dct",
+        "reporting_period": "",
+        "new_request_period": "",
+        "project_name": "",
+        "prog_officer": "",
+        "preparer_name": "",
+        "org_logo_file": "",
+        "activities": [
+            {**a, "authorized": 0, "actual": 0, "lines": []}
+            for a in DEFAULT_FACE_ACTIVITIES
+        ],
+        "cover_body_intro": "",
+    }
+    if mode == "liquidation":
+        data["subject"] = "SUBMISSION OF RETIREMENT DOCUMENT, ANNEX 4 AND FACE FORM"
+        data["cover_body_intro"] = (
+            "I write to notify you of the submission of retirement documents for the following "
+            "activities. Attached are relevant documents for your necessary action."
+        )
+    else:
+        data["subject"] = "SUBMISSION OF FUNDING REQUEST, ANNEX 4 (PROPOSAL) AND FACE FORM"
+        data["cover_body_intro"] = (
+            "I write to submit a funding request for the following activities. "
+            "Attached are the FACE form and Annex 4 (itemized cost estimates) for your necessary action."
+        )
+    return data
+
+
+def _load_package(pkg_id):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM face_packages WHERE id=?", (pkg_id,)).fetchone()
+    conn.close()
+    if not row:
+        return None
+    pkg = dict(row)
+    try:
+        pkg["data"] = _json_face.loads(pkg["data_json"] or "{}")
+    except Exception:
+        pkg["data"] = _empty_face_data(pkg.get("mode") or "requisition")
+    return pkg
+
+
+def _save_package_data(pkg_id, data, **meta):
+    conn = get_db()
+    fields = ["data_json=?"]
+    vals = [_json_face.dumps(data)]
+    for k, v in meta.items():
+        fields.append(f"{k}=?")
+        vals.append(v)
+    vals.append(pkg_id)
+    conn.execute(f"UPDATE face_packages SET {', '.join(fields)} WHERE id=?", vals)
+    conn.commit()
+    conn.close()
+
+
+def _parse_face_activities_from_form(form, mode):
+    activities = []
+    codes = form.getlist("act_code")
+    names = form.getlist("act_name")
+    auths = form.getlist("act_authorized")
+    actuals = form.getlist("act_actual")
+    for i in range(len(names)):
+        code = (codes[i] if i < len(codes) else f".{i+1}.").strip() or f".{i+1}."
+        name = (names[i] if i < len(names) else "").strip()
+        try:
+            auth = float(auths[i]) if i < len(auths) and auths[i] not in (None, "") else 0
+        except ValueError:
+            auth = 0
+        try:
+            act = float(actuals[i]) if mode == "liquidation" and i < len(actuals) and actuals[i] not in (None, "") else 0
+        except ValueError:
+            act = 0
+        lines = []
+        prefixes = form.getlist(f"line_desc_{i}")
+        qtys = form.getlist(f"line_qty_{i}")
+        days = form.getlist(f"line_days_{i}")
+        freqs = form.getlist(f"line_freq_{i}")
+        rates = form.getlist(f"line_rate_{i}")
+        a_qtys = form.getlist(f"line_aqty_{i}")
+        a_days = form.getlist(f"line_adays_{i}")
+        a_freqs = form.getlist(f"line_afreq_{i}")
+        a_rates = form.getlist(f"line_arate_{i}")
+        for j in range(len(prefixes)):
+            desc = (prefixes[j] or "").strip()
+            if not desc:
+                continue
+            def fnum(lst, idx):
+                try:
+                    return float(lst[idx]) if idx < len(lst) and lst[idx] not in (None, "") else 0
+                except ValueError:
+                    return 0
+            q, d, fr, r = fnum(qtys, j), fnum(days, j), fnum(freqs, j), fnum(rates, j)
+            budget_total = q * d * fr * r
+            line = {
+                "description": desc,
+                "qty": q, "days": d, "freq": fr, "rate": r,
+                "budget_total": budget_total,
+            }
+            if mode == "liquidation":
+                aq, ad, af, ar = fnum(a_qtys, j), fnum(a_days, j), fnum(a_freqs, j), fnum(a_rates, j)
+                actual_total = aq * ad * af * ar
+                line.update({
+                    "aqty": aq, "adays": ad, "afreq": af, "arate": ar,
+                    "actual_total": actual_total,
+                    "variance_total": budget_total - actual_total,
+                })
+            lines.append(line)
+        if lines and mode == "liquidation":
+            auth = sum(L["budget_total"] for L in lines) or auth
+            act = sum(L.get("actual_total", 0) for L in lines) or act
+        elif lines:
+            auth = sum(L["budget_total"] for L in lines) or auth
+        if name or auth or act or lines:
+            activities.append({
+                "code": code, "name": name or f"Activity {i+1}",
+                "authorized": auth, "actual": act, "lines": lines,
+            })
+    return activities
+
+
+def _face_is_authorizer():
+    return bool(session.get("face_authorizer_id"))
+
+
+def _face_can_edit_package(pkg):
+    """Preparer may edit draft only; authorizer may review ready packages."""
+    if not pkg:
+        return False
+    st = pkg.get("status") or "draft"
+    if st == "authorized":
+        return False
+    if st == "draft":
+        return not _face_is_authorizer()  # preparers edit drafts
+    if st == "ready":
+        return _face_is_authorizer()  # authorizer reviews/signs
+    return False
+
+
+@app.route("/face")
+def face_hub():
+    conn = get_db()
+    packages = conn.execute(
+        "SELECT id, mode, title, status, preparer_name, prepared_at, ready_at, authorized_at, created_at "
+        "FROM face_packages ORDER BY id DESC LIMIT 100"
+    ).fetchall()
+    conn.close()
+    return render_template(
+        "face_hub.html",
+        packages=packages,
+        is_authorizer=_face_is_authorizer(),
+        authorizer_name=session.get("face_authorizer_name"),
+    )
+
+
+@app.route("/face/authorizer/login", methods=["GET", "POST"])
+def face_authorizer_login():
+    if request.method == "POST":
+        username = request.form.get("username", "").strip().lower()
+        password = request.form.get("password", "")
+        conn = get_db()
+        user = conn.execute(
+            "SELECT * FROM face_users WHERE lower(username)=? AND is_active=1", (username,)
+        ).fetchone()
+        conn.close()
+        if user and check_password_hash(user["password_hash"], password):
+            session["face_authorizer_id"] = user["id"]
+            session["face_authorizer_name"] = user["full_name"] or user["username"]
+            session["face_authorizer_title"] = user["title"] or ""
+            flash(f"Welcome, {session['face_authorizer_name']}. Packages ready for authorization are listed below.", "success")
+            return redirect(url_for("face_hub"), code=303)
+        flash("Invalid authorizing officer credentials.", "danger")
+    return render_template("face_authorizer_login.html")
+
+
+@app.route("/face/authorizer/logout")
+def face_authorizer_logout():
+    for k in ("face_authorizer_id", "face_authorizer_name", "face_authorizer_title"):
+        session.pop(k, None)
+    flash("Authorizing officer logged out.", "info")
+    return redirect(url_for("face_hub"))
+
+
+@app.route("/face/authorizers", methods=["GET", "POST"])
+@login_required("super_admin")
+def face_manage_authorizers():
+    """General admin creates FACE authorizing officers."""
+    conn = get_db()
+    if request.method == "POST":
+        action = request.form.get("action")
+        if action == "create":
+            username = request.form.get("username", "").strip().lower()
+            password = request.form.get("password", "")
+            full_name = request.form.get("full_name", "").strip()
+            title = request.form.get("title", "").strip()
+            if not username or len(password) < 6:
+                flash("Username and password (min 6 characters) required.", "danger")
+            else:
+                exists = conn.execute("SELECT id FROM face_users WHERE lower(username)=?", (username,)).fetchone()
+                if exists:
+                    flash("Username already exists.", "warning")
+                else:
+                    conn.execute(
+                        """INSERT INTO face_users (username, password_hash, full_name, title, is_active, created_at)
+                           VALUES (?,?,?,?,1,?)""",
+                        (username, generate_password_hash(password), full_name, title, datetime.now().isoformat()),
+                    )
+                    conn.commit()
+                    flash(f"Authorizing officer '{username}' created.", "success")
+        elif action == "deactivate":
+            uid = request.form.get("user_id")
+            conn.execute("UPDATE face_users SET is_active=0 WHERE id=?", (uid,))
+            conn.commit()
+            flash("Authorizing officer deactivated.", "info")
+        return redirect(url_for("face_manage_authorizers"), code=303)
+    users = conn.execute("SELECT * FROM face_users ORDER BY username").fetchall()
+    conn.close()
+    return render_template("face_authorizers.html", users=users)
+
+
+@app.route("/face/new/<mode>", methods=["POST"])
+def face_new(mode):
+    if mode not in ("requisition", "liquidation"):
+        flash("Invalid mode.", "danger")
+        return redirect(url_for("face_hub"))
+    if _face_is_authorizer():
+        flash("Authorizing officers review packages; they do not create new ones.", "warning")
+        return redirect(url_for("face_hub"))
+    data = _empty_face_data(mode)
+    data["preparer_name"] = request.form.get("preparer_name", "").strip() or "Preparer"
+    title = request.form.get("title", "").strip() or (
+        f"{'Liquidation' if mode == 'liquidation' else 'Requisition'} – {datetime.now().strftime('%Y-%m-%d')}"
+    )
+    conn = get_db()
+    cur = conn.execute(
+        """INSERT INTO face_packages (mode, title, status, data_json, preparer_name, prepared_at, created_at)
+           VALUES (?,?, 'draft', ?, ?, ?, ?)""",
+        (
+            mode,
+            title,
+            _json_face.dumps(data),
+            data["preparer_name"],
+            datetime.now().isoformat(),
+            datetime.now().isoformat(),
+        ),
+    )
+    conn.commit()
+    pkg_id = cur.lastrowid
+    conn.close()
+    flash("FACE package created. Complete Annex 4, then FACE form and cover letter.", "success")
+    return redirect(url_for("face_annex", pkg_id=pkg_id), code=303)
+
+
+@app.route("/face/package/<int:pkg_id>")
+def face_package_view(pkg_id):
+    pkg = _load_package(pkg_id)
+    if not pkg:
+        flash("Package not found.", "danger")
+        return redirect(url_for("face_hub"))
+    return render_template(
+        "face_package_view.html",
+        pkg=pkg,
+        d=pkg["data"],
+        is_authorizer=_face_is_authorizer(),
+        can_edit=_face_can_edit_package(pkg),
+    )
+
+
+@app.route("/face/package/<int:pkg_id>/annex", methods=["GET", "POST"])
+def face_annex(pkg_id):
+    pkg = _load_package(pkg_id)
+    if not pkg:
+        flash("Package not found.", "danger")
+        return redirect(url_for("face_hub"))
+    mode = pkg["mode"]
+    draft = pkg["data"]
+    is_liq = mode == "liquidation"
+    editable = (pkg["status"] == "draft") and not _face_is_authorizer()
+
+    if request.method == "POST":
+        if not editable:
+            flash("This package can no longer be edited by the preparer.", "warning")
+            return redirect(url_for("face_package_view", pkg_id=pkg_id))
+        draft["org_name"] = request.form.get("org_name", "").strip()
+        draft["implementing_partner"] = draft["org_name"] or request.form.get("implementing_partner", "").strip()
+        draft["project_name"] = request.form.get("project_name", "").strip()
+        draft["prog_officer"] = request.form.get("prog_officer", "").strip()
+        draft["reporting_period"] = request.form.get("reporting_period", "").strip()
+        draft["new_request_period"] = request.form.get("new_request_period", "").strip()
+        draft["activities"] = _parse_face_activities_from_form(request.form, mode)
+        for a in draft["activities"]:
+            if a.get("lines"):
+                a["authorized"] = sum(L.get("budget_total", 0) for L in a["lines"])
+                if mode == "liquidation":
+                    a["actual"] = sum(L.get("actual_total", 0) for L in a["lines"])
+        _save_package_data(pkg_id, draft)
+        if request.form.get("nav") == "face":
+            return redirect(url_for("face_form", pkg_id=pkg_id), code=303)
+        flash("Annex 4 saved.", "success")
+        return redirect(url_for("face_annex", pkg_id=pkg_id), code=303)
+
+    return render_template(
+        "face_annex.html", mode=mode, d=draft, is_liq=is_liq, pkg=pkg, editable=editable, pkg_id=pkg_id
+    )
+
+
+@app.route("/face/package/<int:pkg_id>/form", methods=["GET", "POST"])
+def face_form(pkg_id):
+    pkg = _load_package(pkg_id)
+    if not pkg:
+        flash("Package not found.", "danger")
+        return redirect(url_for("face_hub"))
+    mode = pkg["mode"]
+    draft = pkg["data"]
+    is_liq = mode == "liquidation"
+    editable = (pkg["status"] == "draft") and not _face_is_authorizer()
+
+    if request.method == "POST":
+        if not editable:
+            flash("This package can no longer be edited by the preparer.", "warning")
+            return redirect(url_for("face_package_view", pkg_id=pkg_id))
+        for k in (
+            "un_agency", "country", "date", "programme_code_title", "project_code_title",
+            "responsible_officer", "implementing_partner", "currency", "request_type",
+            "reporting_period", "new_request_period",
+        ):
+            if k in request.form:
+                draft[k] = request.form.get(k, "").strip()
+        auths = request.form.getlist("face_authorized")
+        actuals = request.form.getlist("face_actual")
+        for i, a in enumerate(draft.get("activities") or []):
+            if i < len(auths) and auths[i] not in (None, ""):
+                try:
+                    a["authorized"] = float(auths[i])
+                except ValueError:
+                    pass
+            if mode == "liquidation" and i < len(actuals) and actuals[i] not in (None, ""):
+                try:
+                    a["actual"] = float(actuals[i])
+                except ValueError:
+                    pass
+        _save_package_data(pkg_id, draft)
+        nav = request.form.get("nav")
+        if nav == "cover":
+            return redirect(url_for("face_cover", pkg_id=pkg_id), code=303)
+        if nav == "annex":
+            return redirect(url_for("face_annex", pkg_id=pkg_id), code=303)
+        flash("FACE form saved.", "success")
+        return redirect(url_for("face_form", pkg_id=pkg_id), code=303)
+
+    total_auth = sum(float(a.get("authorized") or 0) for a in draft.get("activities") or [])
+    total_act = sum(float(a.get("actual") or 0) for a in draft.get("activities") or [])
+    return render_template(
+        "face_form.html", mode=mode, d=draft, is_liq=is_liq, pkg=pkg, editable=editable,
+        pkg_id=pkg_id, total_auth=total_auth, total_act=total_act,
+    )
+
+
+@app.route("/face/package/<int:pkg_id>/cover", methods=["GET", "POST"])
+def face_cover(pkg_id):
+    pkg = _load_package(pkg_id)
+    if not pkg:
+        flash("Package not found.", "danger")
+        return redirect(url_for("face_hub"))
+    mode = pkg["mode"]
+    draft = pkg["data"]
+    is_liq = mode == "liquidation"
+    editable = (pkg["status"] == "draft") and not _face_is_authorizer()
+
+    if request.method == "POST":
+        if not editable:
+            flash("Cover letter content is locked after submission for authorization.", "warning")
+            return redirect(url_for("face_package_view", pkg_id=pkg_id))
+        for k in (
+            "org_name", "org_address", "org_email", "ref_no", "date",
+            "addressee_title", "addressee_office", "addressee_city",
+            "subject", "cover_body_intro", "signatory_name", "signatory_title",
+        ):
+            if k in request.form:
+                draft[k] = request.form.get(k, "").strip()
+        # Organization logo on cover letter
+        logo = request.files.get("org_logo")
+        if logo and logo.filename and allowed_file(logo.filename):
+            fname = secure_filename(logo.filename)
+            out = f"face_org_logo_{pkg_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{fname}"
+            logo.save(os.path.join("static", out))
+            old = draft.get("org_logo_file") or ""
+            if old and old != out:
+                try:
+                    op = os.path.join("static", old)
+                    if os.path.isfile(op):
+                        os.remove(op)
+                except Exception:
+                    pass
+            draft["org_logo_file"] = out
+        elif request.form.get("remove_org_logo") == "1":
+            old = draft.get("org_logo_file") or ""
+            if old:
+                try:
+                    op = os.path.join("static", old)
+                    if os.path.isfile(op):
+                        os.remove(op)
+                except Exception:
+                    pass
+            draft["org_logo_file"] = ""
+        amounts = request.form.getlist("cover_amount")
+        for i, a in enumerate(draft.get("activities") or []):
+            if i < len(amounts) and amounts[i] not in (None, ""):
+                try:
+                    if mode == "liquidation":
+                        a["actual"] = float(amounts[i])
+                    else:
+                        a["authorized"] = float(amounts[i])
+                except ValueError:
+                    pass
+        _save_package_data(pkg_id, draft)
+        nav = request.form.get("nav")
+        if nav == "face":
+            return redirect(url_for("face_form", pkg_id=pkg_id), code=303)
+        if nav == "ready":
+            return redirect(url_for("face_mark_ready", pkg_id=pkg_id), code=303)
+        flash("Cover letter saved.", "success")
+        return redirect(url_for("face_cover", pkg_id=pkg_id), code=303)
+
+    return render_template(
+        "face_cover.html", mode=mode, d=draft, is_liq=is_liq, pkg=pkg, editable=editable, pkg_id=pkg_id
+    )
+
+
+@app.route("/face/package/<int:pkg_id>/ready", methods=["POST", "GET"])
+def face_mark_ready(pkg_id):
+    pkg = _load_package(pkg_id)
+    if not pkg:
+        flash("Package not found.", "danger")
+        return redirect(url_for("face_hub"))
+    if _face_is_authorizer():
+        flash("Only the preparing office marks a package ready.", "warning")
+        return redirect(url_for("face_package_view", pkg_id=pkg_id))
+    if pkg["status"] != "draft":
+        flash("Package is already submitted or authorized.", "info")
+        return redirect(url_for("face_package_view", pkg_id=pkg_id))
+    conn = get_db()
+    conn.execute(
+        "UPDATE face_packages SET status='ready', ready_at=? WHERE id=?",
+        (datetime.now().isoformat(), pkg_id),
+    )
+    conn.commit()
+    conn.close()
+    flash("Package marked READY. The authorizing officer can now log in, review, and authorize.", "success")
+    return redirect(url_for("face_package_view", pkg_id=pkg_id), code=303)
+
+
+@app.route("/face/package/<int:pkg_id>/authorize", methods=["GET", "POST"])
+def face_authorize(pkg_id):
+    if not _face_is_authorizer():
+        flash("Please log in as the cover-letter authorizing officer.", "warning")
+        return redirect(url_for("face_authorizer_login"))
+    pkg = _load_package(pkg_id)
+    if not pkg:
+        flash("Package not found.", "danger")
+        return redirect(url_for("face_hub"))
+    if pkg["status"] != "ready":
+        flash("Only packages marked READY can be authorized.", "warning")
+        return redirect(url_for("face_package_view", pkg_id=pkg_id))
+
+    conn = get_db()
+    user = conn.execute("SELECT * FROM face_users WHERE id=?", (session["face_authorizer_id"],)).fetchone()
+    conn.close()
+    if not user:
+        flash("Authorizer account not found.", "danger")
+        return redirect(url_for("face_authorizer_login"))
+
+    if request.method == "POST":
+        # optional upload of signature/stamp at authorize time
+        for field, col in (("signature", "signature_file"), ("stamp", "stamp_file")):
+            f = request.files.get(field)
+            if f and f.filename and allowed_file(f.filename):
+                fname = secure_filename(f.filename)
+                out = f"face_auth_{field}_{user['id']}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{fname}"
+                f.save(os.path.join("static", out))
+                conn = get_db()
+                conn.execute(f"UPDATE face_users SET {col}=? WHERE id=?", (out, user["id"]))
+                conn.commit()
+                conn.close()
+                user = dict(user)
+                user[col] = out
+
+        conn = get_db()
+        user = conn.execute("SELECT * FROM face_users WHERE id=?", (session["face_authorizer_id"],)).fetchone()
+        if not user["signature_file"] or not user["stamp_file"]:
+            conn.close()
+            flash("Upload both your signature and official stamp before authorizing.", "danger")
+            return redirect(url_for("face_authorize", pkg_id=pkg_id))
+
+        note = request.form.get("authorizer_note", "").strip()
+        # stamp signatory on cover from authorizer profile
+        data = pkg["data"]
+        data["signatory_name"] = user["full_name"] or session.get("face_authorizer_name") or ""
+        data["signatory_title"] = user["title"] or session.get("face_authorizer_title") or ""
+        data["_auth_signature"] = user["signature_file"]
+        data["_auth_stamp"] = user["stamp_file"]
+        conn.execute(
+            """UPDATE face_packages SET status='authorized', authorized_by=?, authorized_at=?,
+               authorizer_note=?, data_json=? WHERE id=?""",
+            (
+                user["id"],
+                datetime.now().isoformat(),
+                note,
+                _json_face.dumps(data),
+                pkg_id,
+            ),
+        )
+        conn.commit()
+        conn.close()
+        flash("Package AUTHORIZED. Both the preparing office and authorizing officer can download the PDF.", "success")
+        return redirect(url_for("face_package_view", pkg_id=pkg_id), code=303)
+
+    return render_template(
+        "face_authorize.html",
+        pkg=pkg,
+        d=pkg["data"],
+        user=user,
+    )
+
+
+@app.route("/face/package/<int:pkg_id>/pdf")
+def face_pdf(pkg_id):
+    pkg = _load_package(pkg_id)
+    if not pkg:
+        flash("Package not found.", "danger")
+        return redirect(url_for("face_hub"))
+    if pkg["status"] != "authorized":
+        flash("PDF download is available only after the authorizing officer has signed the cover letter.", "warning")
+        return redirect(url_for("face_package_view", pkg_id=pkg_id))
+    draft = pkg["data"]
+    # use authorizer signature/stamp stored on package
+    draft["signature_file"] = draft.get("_auth_signature") or ""
+    draft["stamp_file"] = draft.get("_auth_stamp") or ""
+    if not draft["signature_file"] or not draft["stamp_file"]:
+        flash("Authorized package is missing signature/stamp files.", "danger")
+        return redirect(url_for("face_package_view", pkg_id=pkg_id))
+    buffer = _build_face_package_pdf(draft, pkg["mode"])
+    label = "Liquidation" if pkg["mode"] == "liquidation" else "Requisition"
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in (draft.get("org_name") or "FACE"))[:24]
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=f"FACE_{label}_{safe}_{pkg_id}_{datetime.now().strftime('%Y%m%d')}.pdf",
+        mimetype="application/pdf",
+    )
+
+
+def _build_face_package_pdf(d, mode):
+    """Build multi-page PDF: Cover (A), FACE (B), Annex 4 (C)."""
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        leftMargin=0.55 * inch, rightMargin=0.55 * inch,
+        topMargin=0.5 * inch, bottomMargin=0.5 * inch,
+    )
+    styles = getSampleStyleSheet()
+    story = []
+    is_liq = mode == "liquidation"
+    activities = d.get("activities") or []
+
+    def money(n):
+        try:
+            return f"{float(n):,.2f}"
+        except Exception:
+            return "0.00"
+
+    sig_path = os.path.join("static", d.get("signature_file") or "")
+    stamp_path = os.path.join("static", d.get("stamp_file") or "")
+
+    # Organization logo on cover letter letterhead
+    logo_file = d.get("org_logo_file") or ""
+    logo_path = os.path.join("static", logo_file) if logo_file else ""
+    if logo_path and os.path.isfile(logo_path):
+        try:
+            story.append(Image(logo_path, width=1.5 * inch, height=0.75 * inch))
+            story.append(Spacer(1, 6))
+        except Exception:
+            pass
+    if d.get("org_name"):
+        story.append(Paragraph(f"<b>{d['org_name']}</b>", styles["Title"]))
+    if d.get("org_address"):
+        story.append(Paragraph(d["org_address"], styles["Normal"]))
+    if d.get("org_email"):
+        story.append(Paragraph(f"Email: {d['org_email']}", styles["Normal"]))
+    story.append(Spacer(1, 10))
+    story.append(Paragraph(
+        f"<b>{d.get('ref_no') or ''}</b>" + "&nbsp;" * 40 + f"{d.get('date') or ''}",
+        styles["Normal"],
+    ))
+    story.append(Spacer(1, 12))
+    story.append(Paragraph(d.get("addressee_title") or "Chief of Field Office,", styles["Normal"]))
+    story.append(Paragraph(d.get("addressee_office") or "UNICEF Field Office,", styles["Normal"]))
+    story.append(Paragraph(d.get("addressee_city") or "", styles["Normal"]))
+    story.append(Spacer(1, 12))
+    story.append(Paragraph(f"<b>{d.get('subject') or ''}</b>", styles["Heading3"]))
+    story.append(Spacer(1, 8))
+    story.append(Paragraph(d.get("cover_body_intro") or "", styles["Normal"]))
+    story.append(Spacer(1, 10))
+    cover_data = [["SN", "ACTIVITY", "AMOUNT (N)"]]
+    grand = 0.0
+    for a in activities:
+        amt = float(a.get("actual") or 0) if is_liq else float(a.get("authorized") or 0)
+        grand += amt
+        cover_data.append([a.get("code") or "", a.get("name") or "", money(amt)])
+    cover_data.append(["", "GRAND TOTAL", money(grand)])
+    ct = Table(cover_data, colWidths=[50, 320, 100])
+    ct.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a365d")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
+        ("ALIGN", (2, 0), (2, -1), "RIGHT"),
+    ]))
+    story.append(ct)
+    story.append(Spacer(1, 20))
+    story.append(Paragraph("Best Regards,", styles["Normal"]))
+    story.append(Spacer(1, 8))
+    if os.path.isfile(sig_path):
+        try:
+            story.append(Image(sig_path, width=1.4 * inch, height=0.55 * inch))
+        except Exception:
+            pass
+    if os.path.isfile(stamp_path):
+        try:
+            story.append(Image(stamp_path, width=0.9 * inch, height=0.9 * inch))
+        except Exception:
+            pass
+    story.append(Paragraph(f"<b>{d.get('signatory_name') or ''}</b>", styles["Normal"]))
+    story.append(Paragraph(d.get("signatory_title") or "", styles["Normal"]))
+    story.append(Paragraph("<i>Authorized signatory (cover letter)</i>", styles["Normal"]))
+    story.append(PageBreak())
+
+    story.append(Paragraph("<b>Funding Authorization and Certificate of Expenditure</b>", styles["Heading1"]))
+    story.append(Paragraph(
+        f"UN Agency: <b>{d.get('un_agency') or 'UNICEF'}</b> &nbsp;&nbsp; Date: <b>{d.get('date') or ''}</b><br/>"
+        f"Country: <b>{d.get('country') or ''}</b> &nbsp;&nbsp; "
+        f"Type: <b>{'Direct Cash Transfer (DCT)' if d.get('request_type')=='dct' else d.get('request_type','').replace('_',' ').title()}</b><br/>"
+        f"Programme: {d.get('programme_code_title') or '—'}<br/>"
+        f"Project: {d.get('project_code_title') or '—'}<br/>"
+        f"Responsible Officer(s): {d.get('responsible_officer') or '—'}<br/>"
+        f"Implementing Partner: <b>{d.get('implementing_partner') or d.get('org_name') or '—'}</b><br/>"
+        f"Currency: {d.get('currency') or 'Naira (N)'}",
+        styles["Normal"],
+    ))
+    story.append(Spacer(1, 8))
+    if is_liq:
+        hdr = ["Activity", "Authorized (A)", "Actual (B)", "Accepted (C)", "Balance (D=A-C)"]
+        face_data = [hdr]
+        for a in activities:
+            auth = float(a.get("authorized") or 0)
+            act = float(a.get("actual") or 0)
+            face_data.append([
+                f"{a.get('code','')} {a.get('name','')}"[:42],
+                money(auth), money(act), "", money(auth),
+            ])
+        face_data.append([
+            "TOTAL",
+            money(sum(float(a.get("authorized") or 0) for a in activities)),
+            money(sum(float(a.get("actual") or 0) for a in activities)),
+            "",
+            money(sum(float(a.get("authorized") or 0) for a in activities)),
+        ])
+        widths = [200, 75, 75, 75, 75]
+    else:
+        hdr = ["Activity", "New Request (E)", "Authorized (F)", "Outstanding (G)"]
+        face_data = [hdr]
+        for a in activities:
+            auth = float(a.get("authorized") or 0)
+            face_data.append([f"{a.get('code','')} {a.get('name','')}"[:48], money(auth), "", money(auth)])
+        face_data.append([
+            "TOTAL",
+            money(sum(float(a.get("authorized") or 0) for a in activities)),
+            "",
+            money(sum(float(a.get("authorized") or 0) for a in activities)),
+        ])
+        widths = [250, 90, 90, 90]
+    ft = Table(face_data, colWidths=widths)
+    ft.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a365d")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
+        ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+    ]))
+    story.append(ft)
+    story.append(Spacer(1, 12))
+    story.append(Paragraph("<b>CERTIFICATION</b>", styles["Heading3"]))
+    if is_liq:
+        story.append(Paragraph(
+            "The actual expenditures for the period stated herein have been disbursed in accordance with the AWP "
+            "and request with itemized cost estimates. Supporting documents can be made available for five years.",
+            styles["Normal"],
+        ))
+    else:
+        story.append(Paragraph(
+            "The funding request shown above represents estimated expenditures as per AWP and itemized cost "
+            "estimates attached.",
+            styles["Normal"],
+        ))
+    story.append(Spacer(1, 10))
+    story.append(Paragraph(f"Date Submitted: {d.get('date') or ''}", styles["Normal"]))
+    if os.path.isfile(sig_path):
+        try:
+            story.append(Image(sig_path, width=1.3 * inch, height=0.5 * inch))
+        except Exception:
+            pass
+    if os.path.isfile(stamp_path):
+        try:
+            story.append(Image(stamp_path, width=0.85 * inch, height=0.85 * inch))
+        except Exception:
+            pass
+    story.append(Paragraph(f"Name/Sign: <b>{d.get('signatory_name') or ''}</b>", styles["Normal"]))
+    story.append(Paragraph(f"Title / Official Stamp: {d.get('signatory_title') or ''}", styles["Normal"]))
+    story.append(PageBreak())
+
+    title = "ANNEX 4 : ITEMIZED COST ESTIMATE / BUDGET"
+    title += " (LIQUIDATION)" if is_liq else " (PROPOSAL)"
+    story.append(Paragraph(f"<b>{title}</b>", styles["Heading2"]))
+    story.append(Paragraph(
+        f"Implementing Partner: <b>{d.get('implementing_partner') or d.get('org_name') or '—'}</b><br/>"
+        f"Project: {d.get('project_name') or '—'}<br/>"
+        f"Responsible Prog. Officer: {d.get('prog_officer') or '—'}<br/>"
+        f"Period: {d.get('reporting_period') or d.get('new_request_period') or '—'}",
+        styles["Normal"],
+    ))
+    story.append(Spacer(1, 8))
+    for a in activities:
+        story.append(Paragraph(f"<b>{a.get('code','')} {a.get('name','')}</b>", styles["Heading4"]))
+        lines = a.get("lines") or []
+        if not lines:
+            if is_liq:
+                story.append(Paragraph(
+                    f"Authorized: N{money(a.get('authorized'))} | Actual: N{money(a.get('actual'))}",
+                    styles["Normal"],
+                ))
+            else:
+                story.append(Paragraph(f"Budget total: N{money(a.get('authorized'))}", styles["Normal"]))
+            story.append(Spacer(1, 6))
+            continue
+        if is_liq:
+            ld = [["Description", "Qty", "Days", "Freq", "Rate", "Budget", "Act.Total", "Variance"]]
+            for L in lines:
+                ld.append([
+                    (L.get("description") or "")[:36],
+                    str(L.get("qty") or ""), str(L.get("days") or ""), str(L.get("freq") or ""),
+                    money(L.get("rate")), money(L.get("budget_total")),
+                    money(L.get("actual_total")), money(L.get("variance_total")),
+                ])
+            ld.append([
+                "Sub-total", "", "", "", "",
+                money(sum(L.get("budget_total", 0) for L in lines)),
+                money(sum(L.get("actual_total", 0) for L in lines)),
+                money(sum(L.get("variance_total", 0) for L in lines)),
+            ])
+            widths = [130, 35, 35, 35, 50, 55, 55, 55]
+        else:
+            ld = [["Description", "Qty", "Days", "Freq", "Rate", "Total"]]
+            for L in lines:
+                ld.append([
+                    (L.get("description") or "")[:40],
+                    str(L.get("qty") or ""), str(L.get("days") or ""), str(L.get("freq") or ""),
+                    money(L.get("rate")), money(L.get("budget_total")),
+                ])
+            ld.append(["Sub-total", "", "", "", "", money(sum(L.get("budget_total", 0) for L in lines))])
+            widths = [180, 40, 40, 40, 60, 70]
+        lt = Table(ld, colWidths=widths)
+        lt.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2b6cb0")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 7),
+            ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
+            ("ALIGN", (1, 1), (-1, -1), "RIGHT"),
+        ]))
+        story.append(lt)
+        story.append(Spacer(1, 10))
+
+    story.append(Spacer(1, 16))
+    story.append(Paragraph("Implementing Partner's Designated Official (authorized):", styles["Normal"]))
+    if os.path.isfile(sig_path):
+        try:
+            story.append(Image(sig_path, width=1.3 * inch, height=0.5 * inch))
+        except Exception:
+            pass
+    if os.path.isfile(stamp_path):
+        try:
+            story.append(Image(stamp_path, width=0.85 * inch, height=0.85 * inch))
+        except Exception:
+            pass
+    story.append(Paragraph(f"<b>{d.get('signatory_name') or ''}</b> — {d.get('signatory_title') or ''}", styles["Normal"]))
+    story.append(Paragraph(f"Date: {d.get('date') or ''}", styles["Normal"]))
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
 
 
 # ---------------------------------------------------------

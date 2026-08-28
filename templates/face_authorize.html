@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Authorize FACE #{{ pkg.id }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between mb-3">
+    <h2>Authorize cover letter — Package #{{ pkg.id }}</h2>
+    <a href="{{ url_for('face_package_view', pkg_id=pkg.id) }}" class="btn btn-outline-secondary">Back</a>
+</div>
+<div class="alert alert-warning">
+    Review the package (Annex 4, FACE form, cover letter) before authorizing.
+    Your name, title, signature and stamp will appear as the cover-letter signatory.
+</div>
+<div class="card p-3 mb-3">
+    <div class="row small">
+        <div class="col-md-6"><strong>Organization:</strong> {{ d.org_name or '—' }}</div>
+        <div class="col-md-6"><strong>Subject:</strong> {{ d.subject or '—' }}</div>
+        <div class="col-md-6"><strong>Partner:</strong> {{ d.implementing_partner or '—' }}</div>
+        <div class="col-md-6"><strong>Mode:</strong> {{ pkg.mode }}</div>
+    </div>
+    <div class="mt-2">
+        <a href="{{ url_for('face_annex', pkg_id=pkg.id) }}" class="btn btn-sm btn-outline-primary">View Annex 4</a>
+        <a href="{{ url_for('face_form', pkg_id=pkg.id) }}" class="btn btn-sm btn-outline-primary">View FACE</a>
+        <a href="{{ url_for('face_cover', pkg_id=pkg.id) }}" class="btn btn-sm btn-outline-primary">View cover letter</a>
+    </div>
+</div>
+<form method="POST" enctype="multipart/form-data" class="card p-4">
+    <h5 class="mb-3">Your signature &amp; stamp</h5>
+    <p class="text-muted small">Upload if not already on file for your account. Both are required to authorize.</p>
+    <div class="row g-3 mb-3">
+        <div class="col-md-6">
+            <label class="form-label">Signature image</label>
+            <input type="file" name="signature" class="form-control" accept="image/*">
+            {% if user.signature_file %}
+            <div class="mt-2"><img src="{{ url_for('static', filename=user.signature_file) }}" style="max-height:60px" class="border rounded p-1"></div>
+            {% endif %}
+        </div>
+        <div class="col-md-6">
+            <label class="form-label">Official stamp</label>
+            <input type="file" name="stamp" class="form-control" accept="image/*">
+            {% if user.stamp_file %}
+            <div class="mt-2"><img src="{{ url_for('static', filename=user.stamp_file) }}" style="max-height:60px" class="border rounded p-1"></div>
+            {% endif %}
+        </div>
+        <div class="col-12">
+            <label class="form-label">Note (optional)</label>
+            <input type="text" name="authorizer_note" class="form-control" placeholder="Optional note for the preparing office">
+        </div>
+    </div>
+    <button type="submit" class="btn btn-success btn-lg" onclick="return confirm('Authorize this FACE package? Signature will be applied to the cover letter.')">
+        <i class="bi bi-check2-circle"></i> Authorize &amp; unlock PDF
+    </button>
+</form>
+{% endblock %}

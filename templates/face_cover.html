@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}Cover Letter – FACE{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+        <h2 class="mb-0">Cover Letter</h2>
+        <small class="text-muted">Step 3 of 3 · Edit letterhead, addressee, subject and amounts</small>
+    </div>
+    <a href="{{ url_for('face_hub') }}" class="btn btn-sm btn-outline-secondary">FACE home</a>
+</div>
+{% if not editable %}
+<div class="alert alert-secondary py-2">View only — package status: <strong>{{ pkg.status }}</strong></div>
+{% endif %}
+<ul class="nav nav-pills mb-4">
+    <li class="nav-item"><a class="nav-link" href="{{ url_for('face_annex', pkg_id=pkg_id) }}">1. Annex 4</a></li>
+    <li class="nav-item"><a class="nav-link" href="{{ url_for('face_form', pkg_id=pkg_id) }}">2. FACE form</a></li>
+    <li class="nav-item"><span class="nav-link active">3. Cover letter</span></li>
+</ul>
+
+<form method="POST" enctype="multipart/form-data">
+    <div class="card p-3 mb-3">
+        <h5 class="mb-3">Letterhead &amp; addressee</h5>
+        <div class="row g-2">
+            <div class="col-md-6">
+                <label class="form-label">Organization name</label>
+                <input type="text" name="org_name" class="form-control" value="{{ d.org_name }}">
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Address</label>
+                <input type="text" name="org_address" class="form-control" value="{{ d.org_address }}">
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Organization logo (cover letter)</label>
+                <input type="file" name="org_logo" class="form-control" accept="image/*" {% if not editable %}disabled{% endif %}>
+                <div class="form-text">Appears at the top of the cover letter PDF.</div>
+                {% if d.org_logo_file %}
+                <div class="mt-2 d-flex align-items-center gap-3">
+                    <img src="{{ url_for('static', filename=d.org_logo_file) }}" alt="Org logo"
+                         style="max-height:56px" class="border rounded p-1 bg-white">
+                    {% if editable %}
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" name="remove_org_logo" value="1" id="rmOrgLogo">
+                        <label class="form-check-label small" for="rmOrgLogo">Remove logo</label>
+                    </div>
+                    {% endif %}
+                </div>
+                {% endif %}
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Email</label>
+                <input type="text" name="org_email" class="form-control" value="{{ d.org_email }}">
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Reference number</label>
+                <input type="text" name="ref_no" class="form-control" value="{{ d.ref_no }}">
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Date</label>
+                <input type="date" name="date" class="form-control" value="{{ d.date }}">
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Addressee title</label>
+                <input type="text" name="addressee_title" class="form-control" value="{{ d.addressee_title }}">
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Office</label>
+                <input type="text" name="addressee_office" class="form-control" value="{{ d.addressee_office }}">
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">City</label>
+                <input type="text" name="addressee_city" class="form-control" value="{{ d.addressee_city }}">
+            </div>
+            <div class="col-12">
+                <label class="form-label">Subject</label>
+                <input type="text" name="subject" class="form-control" value="{{ d.subject }}">
+            </div>
+            <div class="col-12">
+                <label class="form-label">Opening paragraph</label>
+                <textarea name="cover_body_intro" class="form-control" rows="2">{{ d.cover_body_intro }}</textarea>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Signatory name</label>
+                <input type="text" name="signatory_name" class="form-control" value="{{ d.signatory_name }}">
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Signatory title</label>
+                <input type="text" name="signatory_title" class="form-control" value="{{ d.signatory_title }}">
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header bg-white"><strong>Activity amounts on cover letter</strong>
+            <span class="text-muted small">({{ 'Actual / liquidated amounts' if is_liq else 'Requested amounts' }})</span>
+        </div>
+        <div class="table-responsive">
+            <table class="table mb-0">
+                <thead><tr><th>SN</th><th>Activity</th><th style="width:10rem">Amount (₦)</th></tr></thead>
+                <tbody>
+                    {% set ns = namespace(total=0) %}
+                    {% for a in d.activities %}
+                    {% set amt = (a.actual if is_liq else a.authorized) or 0 %}
+                    {% set ns.total = ns.total + (amt|float) %}
+                    <tr>
+                        <td>{{ a.code }}</td>
+                        <td>{{ a.name }}</td>
+                        <td><input type="number" step="0.01" name="cover_amount" class="form-control form-control-sm" value="{{ amt }}"></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+                <tfoot><tr class="fw-bold"><td></td><td>GRAND TOTAL</td><td>₦{{ "{:,.2f}".format(ns.total) }}</td></tr></tfoot>
+            </table>
+        </div>
+    </div>
+
+    <div class="d-flex flex-wrap gap-2 justify-content-between align-items-center">
+        <button type="submit" name="nav" value="face" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> Back to FACE</button>
+        <div class="d-flex flex-wrap gap-2">
+            {% if editable %}
+            <button type="submit" name="nav" value="save" class="btn btn-outline-primary">Save cover letter</button>
+            <button type="submit" name="nav" value="ready" class="btn btn-warning"
+                    onclick="return confirm('Submit for authorizing officer signature? Editing will be locked.')">
+                <i class="bi bi-send"></i> Mark ready for authorization
+            </button>
+            {% else %}
+            <a href="{{ url_for('face_package_view', pkg_id=pkg_id) }}" class="btn btn-outline-primary">Package overview</a>
+            {% if pkg.status == 'authorized' %}
+            <a href="{{ url_for('face_pdf', pkg_id=pkg_id) }}" class="btn btn-success"><i class="bi bi-file-earmark-pdf"></i> Download PDF</a>
+            {% endif %}
+            {% endif %}
+        </div>
+    </div>
+</form>
+{% endblock %}

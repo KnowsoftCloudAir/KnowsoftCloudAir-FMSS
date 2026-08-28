@@ -1,0 +1,201 @@
+{% extends "base.html" %}
+{% block title %}Annex 4 – {{ 'Liquidation' if is_liq else 'Proposal' }}{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+        <h2 class="mb-0">Annex 4 — Itemized {{ 'Liquidation' if is_liq else 'Proposal' }} Budget</h2>
+        <small class="text-muted">Step 1 of 3 · Data here feeds the FACE form and cover letter</small>
+    </div>
+    <a href="{{ url_for('face_hub') }}" class="btn btn-sm btn-outline-secondary">FACE home</a>
+</div>
+
+{% if not editable %}
+<div class="alert alert-secondary py-2">View only — package status: <strong>{{ pkg.status }}</strong></div>
+{% endif %}
+<ul class="nav nav-pills mb-4">
+    <li class="nav-item"><span class="nav-link active">1. Annex 4</span></li>
+    <li class="nav-item"><a class="nav-link" href="{{ url_for('face_form', pkg_id=pkg_id) }}">2. FACE form</a></li>
+    <li class="nav-item"><a class="nav-link" href="{{ url_for('face_cover', pkg_id=pkg_id) }}">3. Cover letter</a></li>
+</ul>
+
+<form method="POST" id="annexForm">
+    <div class="card p-3 mb-3">
+        <div class="row g-2">
+            <div class="col-md-6">
+                <label class="form-label">Implementing partner / organization</label>
+                <input type="text" name="org_name" class="form-control" value="{{ d.org_name }}" required>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Project name</label>
+                <input type="text" name="project_name" class="form-control" value="{{ d.project_name }}">
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Responsible programme officer</label>
+                <input type="text" name="prog_officer" class="form-control" value="{{ d.prog_officer }}">
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">{{ 'Reporting period' if is_liq else 'Request period' }}</label>
+                <input type="text" name="{{ 'reporting_period' if is_liq else 'new_request_period' }}" class="form-control"
+                       value="{{ d.reporting_period if is_liq else d.new_request_period }}"
+                       placeholder="e.g. April to June 2024">
+            </div>
+        </div>
+    </div>
+
+    {% for a in d.activities %}
+    {% set ai = loop.index0 %}
+    <div class="card mb-3">
+        <div class="card-header bg-white d-flex flex-wrap gap-2 align-items-end">
+            <div style="width:4rem">
+                <label class="form-label small mb-0">Code</label>
+                <input type="text" name="act_code" class="form-control form-control-sm" value="{{ a.code }}">
+            </div>
+            <div class="flex-grow-1">
+                <label class="form-label small mb-0">Activity</label>
+                <input type="text" name="act_name" class="form-control form-control-sm" value="{{ a.name }}">
+            </div>
+            <div style="width:8rem">
+                <label class="form-label small mb-0">Authorized ₦</label>
+                <input type="number" step="0.01" name="act_authorized" class="form-control form-control-sm" value="{{ a.authorized or 0 }}">
+            </div>
+            {% if is_liq %}
+            <div style="width:8rem">
+                <label class="form-label small mb-0">Actual ₦</label>
+                <input type="number" step="0.01" name="act_actual" class="form-control form-control-sm" value="{{ a.actual or 0 }}">
+            </div>
+            {% else %}
+            <input type="hidden" name="act_actual" value="0">
+            {% endif %}
+        </div>
+        <div class="card-body p-2">
+            <div class="table-responsive">
+                <table class="table table-sm table-bordered mb-2 align-middle line-table" data-ai="{{ ai }}">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Description</th>
+                            <th style="width:5rem">Qty</th>
+                            <th style="width:5rem">Days</th>
+                            <th style="width:5rem">Freq</th>
+                            <th style="width:6rem">Rate</th>
+                            <th style="width:7rem">Budget</th>
+                            {% if is_liq %}
+                            <th style="width:5rem">A.Qty</th>
+                            <th style="width:5rem">A.Days</th>
+                            <th style="width:5rem">A.Freq</th>
+                            <th style="width:6rem">A.Rate</th>
+                            <th style="width:7rem">Actual</th>
+                            <th style="width:7rem">Variance</th>
+                            {% endif %}
+                            <th style="width:2.5rem"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for L in a.lines or [] %}
+                        <tr>
+                            <td><input type="text" name="line_desc_{{ ai }}" class="form-control form-control-sm" value="{{ L.description }}"></td>
+                            <td><input type="number" step="0.01" name="line_qty_{{ ai }}" class="form-control form-control-sm calc" value="{{ L.qty }}"></td>
+                            <td><input type="number" step="0.01" name="line_days_{{ ai }}" class="form-control form-control-sm calc" value="{{ L.days }}"></td>
+                            <td><input type="number" step="0.01" name="line_freq_{{ ai }}" class="form-control form-control-sm calc" value="{{ L.freq }}"></td>
+                            <td><input type="number" step="0.01" name="line_rate_{{ ai }}" class="form-control form-control-sm calc" value="{{ L.rate }}"></td>
+                            <td><input type="text" class="form-control form-control-sm budget-cell" readonly value="{{ '%.2f'|format(L.budget_total or 0) }}"></td>
+                            {% if is_liq %}
+                            <td><input type="number" step="0.01" name="line_aqty_{{ ai }}" class="form-control form-control-sm calc" value="{{ L.aqty }}"></td>
+                            <td><input type="number" step="0.01" name="line_adays_{{ ai }}" class="form-control form-control-sm calc" value="{{ L.adays }}"></td>
+                            <td><input type="number" step="0.01" name="line_afreq_{{ ai }}" class="form-control form-control-sm calc" value="{{ L.afreq }}"></td>
+                            <td><input type="number" step="0.01" name="line_arate_{{ ai }}" class="form-control form-control-sm calc" value="{{ L.arate }}"></td>
+                            <td><input type="text" class="form-control form-control-sm actual-cell" readonly value="{{ '%.2f'|format(L.actual_total or 0) }}"></td>
+                            <td><input type="text" class="form-control form-control-sm var-cell" readonly value="{{ '%.2f'|format(L.variance_total or 0) }}"></td>
+                            {% endif %}
+                            <td><button type="button" class="btn btn-sm btn-outline-danger rm-line">&times;</button></td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td><input type="text" name="line_desc_{{ ai }}" class="form-control form-control-sm" placeholder="Line description"></td>
+                            <td><input type="number" step="0.01" name="line_qty_{{ ai }}" class="form-control form-control-sm calc" value="1"></td>
+                            <td><input type="number" step="0.01" name="line_days_{{ ai }}" class="form-control form-control-sm calc" value="1"></td>
+                            <td><input type="number" step="0.01" name="line_freq_{{ ai }}" class="form-control form-control-sm calc" value="1"></td>
+                            <td><input type="number" step="0.01" name="line_rate_{{ ai }}" class="form-control form-control-sm calc" value="0"></td>
+                            <td><input type="text" class="form-control form-control-sm budget-cell" readonly value="0.00"></td>
+                            {% if is_liq %}
+                            <td><input type="number" step="0.01" name="line_aqty_{{ ai }}" class="form-control form-control-sm calc" value="1"></td>
+                            <td><input type="number" step="0.01" name="line_adays_{{ ai }}" class="form-control form-control-sm calc" value="1"></td>
+                            <td><input type="number" step="0.01" name="line_afreq_{{ ai }}" class="form-control form-control-sm calc" value="1"></td>
+                            <td><input type="number" step="0.01" name="line_arate_{{ ai }}" class="form-control form-control-sm calc" value="0"></td>
+                            <td><input type="text" class="form-control form-control-sm actual-cell" readonly value="0.00"></td>
+                            <td><input type="text" class="form-control form-control-sm var-cell" readonly value="0.00"></td>
+                            {% endif %}
+                            <td><button type="button" class="btn btn-sm btn-outline-danger rm-line">&times;</button></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <button type="button" class="btn btn-sm btn-outline-primary add-line" data-ai="{{ ai }}">
+                <i class="bi bi-plus"></i> Add line
+            </button>
+        </div>
+    </div>
+    {% endfor %}
+
+    <div class="d-flex flex-wrap gap-2 justify-content-between">
+        <button type="submit" name="nav" value="save" class="btn btn-outline-primary">Save Annex 4</button>
+        <button type="submit" name="nav" value="face" class="btn btn-primary">
+            Continue to FACE form <i class="bi bi-arrow-right"></i>
+        </button>
+    </div>
+</form>
+{% endblock %}
+{% block extra_js %}
+<script>
+(function(){
+  const isLiq = {{ 'true' if is_liq else 'false' }};
+  function num(el){ return parseFloat(el && el.value) || 0; }
+  function fmt(n){ return n.toLocaleString('en-NG',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+  function recalcRow(tr){
+    const inputs = tr.querySelectorAll('input');
+    // structure depends on columns
+    const cells = tr.querySelectorAll('td');
+    const q = num(tr.querySelector('input[name^="line_qty"]'));
+    const d = num(tr.querySelector('input[name^="line_days"]'));
+    const f = num(tr.querySelector('input[name^="line_freq"]'));
+    const r = num(tr.querySelector('input[name^="line_rate"]'));
+    const budget = q*d*f*r;
+    const bcell = tr.querySelector('.budget-cell');
+    if (bcell) bcell.value = fmt(budget);
+    if (isLiq) {
+      const aq = num(tr.querySelector('input[name^="line_aqty"]'));
+      const ad = num(tr.querySelector('input[name^="line_adays"]'));
+      const af = num(tr.querySelector('input[name^="line_afreq"]'));
+      const ar = num(tr.querySelector('input[name^="line_arate"]'));
+      const actual = aq*ad*af*ar;
+      const ac = tr.querySelector('.actual-cell');
+      const vc = tr.querySelector('.var-cell');
+      if (ac) ac.value = fmt(actual);
+      if (vc) vc.value = fmt(budget - actual);
+    }
+  }
+  document.querySelectorAll('.line-table').forEach(table => {
+    table.addEventListener('input', e => { if (e.target.classList.contains('calc')) recalcRow(e.target.closest('tr')); });
+  });
+  document.querySelectorAll('.add-line').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const ai = btn.dataset.ai;
+      const table = document.querySelector('.line-table[data-ai="'+ai+'"] tbody');
+      const tr = table.querySelector('tr').cloneNode(true);
+      tr.querySelectorAll('input').forEach(inp => {
+        if (inp.readOnly) inp.value = '0.00';
+        else if (inp.type === 'number') inp.value = inp.name.includes('qty') || inp.name.includes('days') || inp.name.includes('freq') || inp.name.includes('aqty') || inp.name.includes('adays') || inp.name.includes('afreq') ? '1' : '0';
+        else inp.value = '';
+      });
+      table.appendChild(tr);
+    });
+  });
+  document.addEventListener('click', e => {
+    if (e.target.classList.contains('rm-line')) {
+      const tbody = e.target.closest('tbody');
+      if (tbody.querySelectorAll('tr').length > 1) e.target.closest('tr').remove();
+    }
+  });
+})();
+</script>
+{% endblock %}

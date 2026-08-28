@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}FACE Authorizing Officers{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between mb-4">
+    <h2>FACE Authorizing Officers</h2>
+    <a href="{{ url_for('face_hub') }}" class="btn btn-outline-secondary">Back to FACE</a>
+</div>
+<div class="row g-4">
+    <div class="col-md-5">
+        <div class="card p-4">
+            <h5>Create officer</h5>
+            <form method="POST">
+                <input type="hidden" name="action" value="create">
+                <div class="mb-2">
+                    <label class="form-label">Username</label>
+                    <input type="text" name="username" class="form-control" required>
+                </div>
+                <div class="mb-2">
+                    <label class="form-label">Full name (appears on cover letter)</label>
+                    <input type="text" name="full_name" class="form-control">
+                </div>
+                <div class="mb-2">
+                    <label class="form-label">Title</label>
+                    <input type="text" name="title" class="form-control" placeholder="e.g. Executive Secretary">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Password</label>
+                    <input type="text" name="password" class="form-control" minlength="6" required>
+                </div>
+                <button class="btn btn-primary">Create</button>
+            </form>
+        </div>
+    </div>
+    <div class="col-md-7">
+        <div class="card">
+            <table class="table mb-0">
+                <thead><tr><th>Username</th><th>Name</th><th>Title</th><th>Status</th><th></th></tr></thead>
+                <tbody>
+                    {% for u in users %}
+                    <tr>
+                        <td>{{ u.username }}</td>
+                        <td>{{ u.full_name or '—' }}</td>
+                        <td>{{ u.title or '—' }}</td>
+                        <td>{% if u.is_active %}<span class="badge bg-success">Active</span>{% else %}<span class="badge bg-secondary">Off</span>{% endif %}</td>
+                        <td>
+                            {% if u.is_active %}
+                            <form method="POST" class="d-inline" onsubmit="return confirm('Deactivate?')">
+                                <input type="hidden" name="action" value="deactivate">
+                                <input type="hidden" name="user_id" value="{{ u.id }}">
+                                <button class="btn btn-sm btn-outline-danger">Deactivate</button>
+                            </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="5" class="text-muted text-center">No officers yet</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

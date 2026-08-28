@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}FACE Form – {{ 'Liquidation' if is_liq else 'Requisition' }}{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+        <h2 class="mb-0">Official FACE Form</h2>
+        <small class="text-muted">Step 2 of 3 · {{ 'Reporting columns filled from Annex 4' if is_liq else 'Request columns filled from Annex 4' }}</small>
+    </div>
+    <a href="{{ url_for('face_hub') }}" class="btn btn-sm btn-outline-secondary">FACE home</a>
+</div>
+{% if not editable %}
+<div class="alert alert-secondary py-2">View only — package status: <strong>{{ pkg.status }}</strong></div>
+{% endif %}
+<ul class="nav nav-pills mb-4">
+    <li class="nav-item"><a class="nav-link" href="{{ url_for('face_annex', pkg_id=pkg_id) }}">1. Annex 4</a></li>
+    <li class="nav-item"><span class="nav-link active">2. FACE form</span></li>
+    <li class="nav-item"><a class="nav-link" href="{{ url_for('face_cover', pkg_id=pkg_id) }}">3. Cover letter</a></li>
+</ul>
+
+<form method="POST">
+    <div class="card p-3 mb-3">
+        <div class="row g-2">
+            <div class="col-md-3">
+                <label class="form-label">UN Agency</label>
+                <input type="text" name="un_agency" class="form-control" value="{{ d.un_agency }}">
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Country</label>
+                <input type="text" name="country" class="form-control" value="{{ d.country }}">
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Date</label>
+                <input type="date" name="date" class="form-control" value="{{ d.date }}">
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Type of request</label>
+                <select name="request_type" class="form-select">
+                    <option value="dct" {% if d.request_type=='dct' %}selected{% endif %}>Direct Cash Transfer (DCT)</option>
+                    <option value="reimbursement" {% if d.request_type=='reimbursement' %}selected{% endif %}>Reimbursement</option>
+                    <option value="direct_payment" {% if d.request_type=='direct_payment' %}selected{% endif %}>Direct payment</option>
+                </select>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Programme code &amp; title</label>
+                <input type="text" name="programme_code_title" class="form-control" value="{{ d.programme_code_title }}">
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Project code &amp; title</label>
+                <input type="text" name="project_code_title" class="form-control" value="{{ d.project_code_title }}">
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Responsible officer(s)</label>
+                <input type="text" name="responsible_officer" class="form-control" value="{{ d.responsible_officer }}">
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Implementing partner</label>
+                <input type="text" name="implementing_partner" class="form-control" value="{{ d.implementing_partner or d.org_name }}">
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Currency</label>
+                <input type="text" name="currency" class="form-control" value="{{ d.currency }}">
+            </div>
+            {% if is_liq %}
+            <div class="col-md-4">
+                <label class="form-label">Reporting period</label>
+                <input type="text" name="reporting_period" class="form-control" value="{{ d.reporting_period }}">
+            </div>
+            {% else %}
+            <div class="col-md-4">
+                <label class="form-label">New request period</label>
+                <input type="text" name="new_request_period" class="form-control" value="{{ d.new_request_period }}">
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="table-responsive">
+            <table class="table table-bordered mb-0 align-middle">
+                <thead class="table-primary">
+                    <tr>
+                        <th>Activity (from AWP)</th>
+                        {% if is_liq %}
+                        <th>Authorized (A)</th>
+                        <th>Actual expenditure (B)</th>
+                        <th class="table-secondary">Accepted by Agency (C)</th>
+                        <th>Balance (D = A − C)</th>
+                        {% else %}
+                        <th>New request amount (E)</th>
+                        <th class="table-secondary">Authorized by Agency (F)</th>
+                        <th>Outstanding (G)</th>
+                        {% endif %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for a in d.activities %}
+                    <tr>
+                        <td><strong>{{ a.code }}</strong> {{ a.name }}</td>
+                        {% if is_liq %}
+                        <td><input type="number" step="0.01" name="face_authorized" class="form-control form-control-sm" value="{{ a.authorized or 0 }}"></td>
+                        <td><input type="number" step="0.01" name="face_actual" class="form-control form-control-sm" value="{{ a.actual or 0 }}"></td>
+                        <td class="text-muted small">UNICEF use</td>
+                        <td class="text-muted small">UNICEF use</td>
+                        {% else %}
+                        <td><input type="number" step="0.01" name="face_authorized" class="form-control form-control-sm" value="{{ a.authorized or 0 }}"></td>
+                        <td class="text-muted small">UNICEF use</td>
+                        <td class="text-muted small">UNICEF use</td>
+                        {% endif %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+                <tfoot>
+                    <tr class="fw-bold">
+                        <td>Total</td>
+                        {% if is_liq %}
+                        <td>₦{{ "{:,.2f}".format(total_auth) }}</td>
+                        <td>₦{{ "{:,.2f}".format(total_act) }}</td>
+                        <td></td><td></td>
+                        {% else %}
+                        <td>₦{{ "{:,.2f}".format(total_auth) }}</td>
+                        <td></td><td></td>
+                        {% endif %}
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </div>
+
+    <div class="alert alert-light border">
+        <strong>Certification</strong>
+        {% if is_liq %}
+        <div class="small mt-1">☑ Actual expenditures disbursed in accordance with the AWP and itemized cost estimates. Supporting documents available for five years.</div>
+        {% else %}
+        <div class="small mt-1">☑ Funding request represents estimated expenditures as per AWP and itemized cost estimates attached.</div>
+        {% endif %}
+    </div>
+
+    <div class="d-flex flex-wrap gap-2 justify-content-between">
+        <button type="submit" name="nav" value="annex" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> Back to Annex 4</button>
+        <div class="d-flex gap-2">
+            <button type="submit" name="nav" value="save" class="btn btn-outline-primary">Save FACE</button>
+            <button type="submit" name="nav" value="cover" class="btn btn-primary">Continue to Cover letter <i class="bi bi-arrow-right"></i></button>
+        </div>
+    </div>
+</form>
+{% endblock %}

@@ -210,6 +210,11 @@
             </button>
             <div class="collapse navbar-collapse" id="nav">
                 <ul class="navbar-nav ms-auto align-items-lg-center gap-lg-1">
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('face_hub') }}" title="FACE forms">
+                            <i class="bi bi-file-earmark-ruled"></i> FACE
+                        </a>
+                    </li>
                     {% if session.get('admin') %}
                         <li class="nav-item"><a class="nav-link" href="{{ url_for('admin_dashboard') }}"><i class="bi bi-speedometer2"></i> Admin</a></li>
                         <li class="nav-item"><a class="nav-link" href="{{ url_for('admin_logout') }}">Logout</a></li>

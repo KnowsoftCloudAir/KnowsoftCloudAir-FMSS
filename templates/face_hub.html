@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}FACE Forms{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
+    <div>
+        <h2 class="fw-bold mb-1"><i class="bi bi-file-earmark-ruled me-2"></i>FACE Forms</h2>
+        <p class="text-muted mb-0 small">Prepare → Mark ready → Authorizing officer signs cover letter → Download</p>
+    </div>
+    <div class="d-flex flex-wrap gap-2">
+        {% if is_authorizer %}
+        <span class="badge bg-success align-self-center">Authorizer: {{ authorizer_name }}</span>
+        <a href="{{ url_for('face_authorizer_logout') }}" class="btn btn-sm btn-outline-secondary">Logout authorizer</a>
+        {% else %}
+        <a href="{{ url_for('face_authorizer_login') }}" class="btn btn-sm btn-outline-success">
+            <i class="bi bi-pen"></i> Authorizing officer login
+        </a>
+        {% endif %}
+        {% if session.get('admin') and session.get('admin_role') == 'super' %}
+        <a href="{{ url_for('face_manage_authorizers') }}" class="btn btn-sm btn-outline-primary">
+            <i class="bi bi-people"></i> Manage authorizers
+        </a>
+        {% endif %}
+    </div>
+</div>
+
+{% if not is_authorizer %}
+<div class="row g-3 mb-4">
+    <div class="col-md-6">
+        <div class="card p-3 h-100">
+            <h5 class="text-primary"><i class="bi bi-cash-stack me-1"></i> New Fund Requisition</h5>
+            <form method="POST" action="{{ url_for('face_new', mode='requisition') }}" class="row g-2">
+                <div class="col-md-6">
+                    <input type="text" name="title" class="form-control form-control-sm" placeholder="Package title (optional)">
+                </div>
+                <div class="col-md-6">
+                    <input type="text" name="preparer_name" class="form-control form-control-sm" placeholder="Your name (preparer)">
+                </div>
+                <div class="col-12">
+                    <button class="btn btn-primary btn-sm">Create requisition package</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card p-3 h-100">
+            <h5 class="text-success"><i class="bi bi-journal-check me-1"></i> New Fund Liquidation</h5>
+            <form method="POST" action="{{ url_for('face_new', mode='liquidation') }}" class="row g-2">
+                <div class="col-md-6">
+                    <input type="text" name="title" class="form-control form-control-sm" placeholder="Package title (optional)">
+                </div>
+                <div class="col-md-6">
+                    <input type="text" name="preparer_name" class="form-control form-control-sm" placeholder="Your name (preparer)">
+                </div>
+                <div class="col-12">
+                    <button class="btn btn-success btn-sm">Create liquidation package</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% else %}
+<div class="alert alert-info">
+    You are logged in as <strong>authorizing officer</strong>. Open packages with status <strong>Ready</strong> to review and authorize.
+</div>
+{% endif %}
+
+<div class="card">
+    <div class="card-header bg-white"><strong>FACE packages</strong></div>
+    <div class="table-responsive">
+        <table class="table mb-0 align-middle">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Title</th>
+                    <th>Type</th>
+                    <th>Status</th>
+                    <th>Preparer</th>
+                    <th>Updated</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for p in packages %}
+                <tr>
+                    <td>#{{ p.id }}</td>
+                    <td>{{ p.title or '—' }}</td>
+                    <td>
+                        {% if p.mode == 'liquidation' %}
+                        <span class="badge bg-success">Liquidation</span>
+                        {% else %}
+                        <span class="badge bg-primary">Requisition</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if p.status == 'draft' %}<span class="badge bg-secondary">Draft</span>
+                        {% elif p.status == 'ready' %}<span class="badge bg-warning text-dark">Ready for signature</span>
+                        {% elif p.status == 'authorized' %}<span class="badge bg-success">Authorized</span>
+                        {% else %}<span class="badge bg-light text-dark">{{ p.status }}</span>{% endif %}
+                    </td>
+                    <td>{{ p.preparer_name or '—' }}</td>
+                    <td class="small text-muted">{{ (p.authorized_at or p.ready_at or p.prepared_at or p.created_at or '')[:16] }}</td>
+                    <td class="text-end">
+                        <a href="{{ url_for('face_package_view', pkg_id=p.id) }}" class="btn btn-sm btn-outline-primary">View</a>
+                        {% if p.status == 'authorized' %}
+                        <a href="{{ url_for('face_pdf', pkg_id=p.id) }}" class="btn btn-sm btn-success">PDF</a>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7" class="text-center text-muted py-4">No FACE packages yet.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
