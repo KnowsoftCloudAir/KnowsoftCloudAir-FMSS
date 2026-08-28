@@ -1,37 +1,33 @@
 {% extends "base.html" %}
-{% block title %}Committee Login{% if org %} – {{ org.name }}{% endif %}{% endblock %}
+{% block title %}Client Admin – {{ org.name }}{% endblock %}
 {% block content %}
 <div class="row justify-content-center">
     <div class="col-md-5">
         <div class="card p-4">
-            <h3 class="text-center mb-2"><i class="bi bi-people"></i> Committee Login</h3>
-            {% if org %}
+            <h3 class="text-center mb-2"><i class="bi bi-person-gear"></i> Client Admin Login</h3>
             <p class="text-center text-muted mb-3">
                 <strong>{{ org.name }}</strong><br>
-                <span class="small">Only committee members assigned to this organization can sign in here.</span>
+                <span class="small">For the sub-admin assigned to manage this organization only.</span>
             </p>
-            {% endif %}
             <form method="POST">
                 <div class="mb-3">
-                    <label class="form-label">Name</label>
-                    <input type="text" name="name" class="form-control form-control-lg" required autofocus>
+                    <label class="form-label">Username</label>
+                    <input type="text" name="username" class="form-control form-control-lg" required autofocus>
                 </div>
                 <div class="mb-3">
                     <label class="form-label">Password</label>
                     <input type="password" name="password" class="form-control form-control-lg" required>
                 </div>
                 <div class="d-grid">
-                    <button type="submit" class="btn btn-success btn-lg">Login</button>
+                    <button type="submit" class="btn btn-primary btn-lg">Login</button>
                 </div>
             </form>
             <p class="text-muted small text-center mt-3 mb-0">
-                Credentials are provided by the client administrator for this organization.
+                Credentials are issued by the general administrator when your organization is registered or assigned.
             </p>
-            {% if org %}
             <p class="text-center mt-2 mb-0">
-                <a href="{{ url_for('org_portal') }}">Back to {{ org.name }} portal</a>
+                <a href="{{ url_for('org_portal') }}">Back to portal</a>
             </p>
-            {% endif %}
         </div>
     </div>
 </div>

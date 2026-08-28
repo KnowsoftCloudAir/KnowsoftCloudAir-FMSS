@@ -512,11 +512,25 @@ def close_expired_and_awarded_services(conn=None):
 
 @app.context_processor
 def inject_globals():
-    """Make app branding available in every template."""
+    """Make app branding and selected organization available in every template."""
+    selected_org = None
+    oid = session.get("selected_org_id")
+    if oid:
+        try:
+            conn = get_db()
+            selected_org = conn.execute(
+                "SELECT id, name, logo_filename FROM organizations WHERE id=? AND is_active=1",
+                (oid,),
+            ).fetchone()
+            conn.close()
+        except Exception:
+            selected_org = None
     return {
         "app_logo": get_setting("app_logo_filename", ""),
         "app_title": get_setting("app_title", "Knowsoft eProcurement"),
         "now": datetime.now,
+        "selected_org": selected_org,
+        "selected_org_id": oid,
     }
 
 
@@ -1239,8 +1253,12 @@ def admin_change_password():
 
 @app.route("/admin/logout")
 def admin_logout():
-    for k in ("admin", "admin_id", "admin_username", "admin_role", "admin_must_change"):
+    org_id = session.get("client_org_id") or session.get("selected_org_id")
+    for k in ("admin", "admin_id", "admin_username", "admin_role", "admin_must_change", "client_org_id"):
         session.pop(k, None)
+    if org_id:
+        session["selected_org_id"] = org_id
+        return redirect(url_for("org_portal"))
     return redirect(url_for("index"))
 
 
@@ -2839,35 +2857,105 @@ def download_file(filename):
 # ---------------------------------------------------------
 @app.route("/committee/login", methods=["GET", "POST"])
 def committee_login():
+    """Global entry; prefers selected organization when present."""
     org_id = session.get("selected_org_id")
+    if org_id:
+        return redirect(url_for("org_committee_login", org_id=org_id))
+    return redirect(url_for("index"))
+
+
+@app.route("/org/<int:org_id>/committee/login", methods=["GET", "POST"])
+def org_committee_login(org_id):
+    """Committee login scoped to one recipient organization."""
+    conn = get_db()
+    org = conn.execute(
+        "SELECT * FROM organizations WHERE id=? AND is_active=1", (org_id,)
+    ).fetchone()
+    if not org:
+        conn.close()
+        flash("Organization not found or inactive.", "danger")
+        return redirect(url_for("index"))
+    session["selected_org_id"] = org_id
     if request.method == "POST":
         name = request.form.get("name", "").strip()
         password = request.form.get("password", "")
-        conn = get_db()
-        # Allow login for members of selected org or any active member
-        if org_id:
-            member = conn.execute(
-                "SELECT * FROM committee WHERE name=? AND is_active=1 AND (organization_id=? OR organization_id IS NULL)",
-                (name, org_id),
-            ).fetchone()
-        else:
-            member = conn.execute(
-                "SELECT * FROM committee WHERE name=? AND is_active=1", (name,)
-            ).fetchone()
-        conn.close()
+        member = conn.execute(
+            """SELECT * FROM committee
+               WHERE name=? AND is_active=1 AND organization_id=?""",
+            (name, org_id),
+        ).fetchone()
         if member and check_password_hash(member["password_hash"], password):
             session["committee_id"] = member["id"]
             session["committee_name"] = member["name"]
-            session["committee_org_id"] = member["organization_id"]
+            session["committee_org_id"] = org_id
+            conn.close()
+            flash(f"Welcome, {member['name']} — {org['name']} committee.", "success")
             return redirect(url_for("committee_score"), code=303)
-        flash("Invalid name or password.", "danger")
-    return render_template("committee_login.html")
+        flash("Invalid name or password for this organization's committee.", "danger")
+    conn.close()
+    return render_template("committee_login.html", org=org, org_scoped=True)
+
+
+@app.route("/org/<int:org_id>/admin/login", methods=["GET", "POST"])
+def org_client_admin_login(org_id):
+    """Client (sub-admin) login for a single assigned organization — independent of general admin."""
+    conn = get_db()
+    org = conn.execute(
+        "SELECT * FROM organizations WHERE id=? AND is_active=1", (org_id,)
+    ).fetchone()
+    if not org:
+        conn.close()
+        flash("Organization not found or inactive.", "danger")
+        return redirect(url_for("index"))
+    session["selected_org_id"] = org_id
+    if request.method == "POST":
+        username = request.form.get("username", "").strip().lower()
+        password = request.form.get("password", "")
+        admin = conn.execute(
+            "SELECT * FROM admin_users WHERE lower(username)=? AND (is_active=1 OR is_active IS NULL)",
+            (username,),
+        ).fetchone()
+        ok = False
+        if admin and check_password_hash(admin["password_hash"], password):
+            role = admin["role"] if "role" in admin.keys() and admin["role"] else "super"
+            if role == "super":
+                ok = True
+            else:
+                # Sub-admin must be assigned to this organization
+                assigned = conn.execute(
+                    """SELECT id FROM admin_org_assignments
+                       WHERE admin_id=? AND organization_id=? AND is_active=1""",
+                    (admin["id"], org_id),
+                ).fetchone()
+                ok = bool(assigned)
+        conn.close()
+        if ok and admin:
+            role = admin["role"] if "role" in admin.keys() and admin["role"] else "super"
+            session["admin"] = True
+            session["admin_id"] = admin["id"]
+            session["admin_username"] = admin["username"]
+            session["admin_role"] = role
+            session["admin_must_change"] = bool(admin["must_change_password"])
+            session["client_org_id"] = org_id  # scope hint
+            if admin["must_change_password"]:
+                flash("Please change your password.", "warning")
+                return redirect(url_for("admin_change_password"), code=303)
+            flash(f"Logged in to manage {org['name']}.", "success")
+            return redirect(url_for("admin_org_detail", org_id=org_id), code=303)
+        flash("Invalid credentials or you are not assigned to this organization.", "danger")
+        return render_template("org_client_admin_login.html", org=org)
+    conn.close()
+    return render_template("org_client_admin_login.html", org=org)
 
 
 @app.route("/committee/logout")
 def committee_logout():
+    org_id = session.get("committee_org_id") or session.get("selected_org_id")
     for k in ("committee_id", "committee_name", "committee_org_id"):
         session.pop(k, None)
+    if org_id:
+        session["selected_org_id"] = org_id
+        return redirect(url_for("org_portal"))
     return redirect(url_for("index"))
 
 

@@ -227,20 +227,34 @@
                         <li class="nav-item"><a class="nav-link" href="{{ url_for('committee_score') }}">Score</a></li>
                         <li class="nav-item"><a class="nav-link" href="{{ url_for('committee_logout') }}">Logout</a></li>
                     {% else %}
+                        {% if selected_org %}
+                        <li class="nav-item">
+                            <span class="nav-link small opacity-75 d-none d-lg-inline">{{ selected_org.name[:28] }}{% if selected_org.name|length > 28 %}…{% endif %}</span>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="{{ url_for('org_committee_login', org_id=selected_org.id) }}"
+                               title="{{ selected_org.name }} — Procurement Committee">
+                                <i class="bi bi-people fs-5"></i>
+                                <span class="d-none d-md-inline ms-1">Committee</span>
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="{{ url_for('org_client_admin_login', org_id=selected_org.id) }}"
+                               title="{{ selected_org.name }} — Client Admin">
+                                <i class="bi bi-person-gear fs-5"></i>
+                                <span class="d-none d-md-inline ms-1">Client Admin</span>
+                            </a>
+                        </li>
+                        {% endif %}
                         <li class="nav-item dropdown">
                             <a class="nav-link dropdown-toggle" href="#" id="staffLogin" role="button"
-                               data-bs-toggle="dropdown" aria-expanded="false" title="Staff login">
+                               data-bs-toggle="dropdown" aria-expanded="false" title="General staff login">
                                 <i class="bi bi-shield-lock fs-5"></i>
                             </a>
                             <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="staffLogin">
                                 <li>
                                     <a class="dropdown-item" href="{{ url_for('admin_login') }}">
-                                        <i class="bi bi-person-badge me-2 text-primary"></i>Admin Login
-                                    </a>
-                                </li>
-                                <li>
-                                    <a class="dropdown-item" href="{{ url_for('committee_login') }}">
-                                        <i class="bi bi-people me-2 text-success"></i>Procurement Committee Login
+                                        <i class="bi bi-person-badge me-2 text-primary"></i>General Admin Login
                                     </a>
                                 </li>
                             </ul>
