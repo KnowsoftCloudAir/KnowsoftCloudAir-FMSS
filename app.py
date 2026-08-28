@@ -3205,6 +3205,27 @@ def _parse_face_activities_from_form(form, mode):
     return activities
 
 
+
+def _sync_face_from_annex(draft, mode):
+    """Roll Annex 4 line totals into activity authorized/actual used by FACE + cover letter."""
+    for a in draft.get("activities") or []:
+        lines = a.get("lines") or []
+        if lines:
+            a["authorized"] = float(sum(float(L.get("budget_total") or 0) for L in lines))
+            if mode == "liquidation":
+                a["actual"] = float(sum(float(L.get("actual_total") or 0) for L in lines))
+        else:
+            a["authorized"] = float(a.get("authorized") or 0)
+            if mode == "liquidation":
+                a["actual"] = float(a.get("actual") or 0)
+            else:
+                a["actual"] = 0
+    # Header defaults from annex fields
+    if draft.get("org_name") and not draft.get("implementing_partner"):
+        draft["implementing_partner"] = draft["org_name"]
+    return draft
+
+
 def _face_is_authorizer():
     return bool(session.get("face_authorizer_id"))
 
@@ -3221,6 +3242,92 @@ def _face_can_edit_package(pkg):
     if st == "ready":
         return _face_is_authorizer()  # authorizer reviews/signs
     return False
+
+
+
+def _face_sample_data(mode="liquidation"):
+    """Demo package data so users can preview the final report layout."""
+    data = _empty_face_data(mode)
+    data.update({
+        "org_name": "Jigawa State Primary Healthcare Development Agency",
+        "org_address": "Block B, New State Secretariat Complex, Dutse, Jigawa State",
+        "org_email": "phc@jigawastate.gov.ng",
+        "ref_no": "PHCDA/PHC/IMM/VOL1/150",
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "addressee_title": "Chief of Field Office,",
+        "addressee_office": "UNICEF Kano Field Office,",
+        "addressee_city": "Kano.",
+        "signatory_name": "Dr. Sample Authorizing Officer",
+        "signatory_title": "Executive Secretary",
+        "un_agency": "UNICEF",
+        "country": "NIGERIA",
+        "programme_code_title": "03 Programme Effectiveness — Outcome 1: Maternal Newborn and Child Health",
+        "project_code_title": "Outcome 1.1 : HSS",
+        "responsible_officer": "Sample Programme Officer",
+        "implementing_partner": "Jigawa State Primary Healthcare Development Agency",
+        "currency": "Naira (N)",
+        "request_type": "dct",
+        "reporting_period": "April to June 2024",
+        "new_request_period": "July to September 2024",
+        "project_name": "Jigawa State Proposal for Quarter Activities (SAMPLE)",
+        "prog_officer": "Sample Programme Officer",
+        "preparer_name": "Sample Preparer",
+    })
+    # Sample line under activity A; other activities use summary amounts
+    sample_lines = [
+        {"description": "Hall hire", "qty": 2, "days": 20, "freq": 1, "rate": 4000,
+         "budget_total": 160000, "aqty": 2, "adays": 20, "afreq": 1, "arate": 4000,
+         "actual_total": 160000, "variance_total": 0},
+        {"description": "2 tea breaks", "qty": 2, "days": 20, "freq": 1, "rate": 4000,
+         "budget_total": 160000, "aqty": 2, "adays": 20, "afreq": 1, "arate": 4000,
+         "actual_total": 160000, "variance_total": 0},
+        {"description": "Lunch", "qty": 2, "days": 20, "freq": 1, "rate": 4000,
+         "budget_total": 160000, "aqty": 2, "adays": 20, "afreq": 1, "arate": 4000,
+         "actual_total": 160000, "variance_total": 0},
+        {"description": "Stationeries", "qty": 2, "days": 20, "freq": 1, "rate": 4000,
+         "budget_total": 160000, "aqty": 2, "adays": 20, "afreq": 1, "arate": 4000,
+         "actual_total": 160000, "variance_total": 0},
+        {"description": "Transport", "qty": 2, "days": 20, "freq": 1, "rate": 4000,
+         "budget_total": 160000, "aqty": 2, "adays": 20, "afreq": 1, "arate": 4000,
+         "actual_total": 160000, "variance_total": 0},
+    ]
+    amounts = [
+        (2440000, 2280000),
+        (23200000, 21280000),
+        (2640000, 2640000),
+        (3280000, 3280000),
+        (2640000, 2640000),
+        (3120000, 3120000),
+        (2640000, 2640000),
+    ]
+    for i, a in enumerate(data["activities"]):
+        auth, act = amounts[i] if i < len(amounts) else (0, 0)
+        a["authorized"] = auth
+        a["actual"] = act if mode == "liquidation" else 0
+        a["lines"] = sample_lines if i == 0 else []
+    if mode != "liquidation":
+        for a in data["activities"]:
+            a["actual"] = 0
+            for L in a.get("lines") or []:
+                L["actual_total"] = 0
+                L["variance_total"] = L.get("budget_total", 0)
+    return data
+
+
+@app.route("/face/sample/<mode>.pdf")
+def face_sample_pdf(mode):
+    """Public sample final report so users can see the expected PDF layout."""
+    if mode not in ("liquidation", "requisition"):
+        mode = "liquidation"
+    draft = _face_sample_data(mode)
+    buffer = _build_face_package_pdf(draft, mode)
+    label = "Liquidation" if mode == "liquidation" else "Requisition"
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=f"FACE_SAMPLE_{label}_{datetime.now().strftime('%Y%m%d')}.pdf",
+        mimetype="application/pdf",
+    )
 
 
 @app.route("/face")
@@ -3374,15 +3481,12 @@ def face_annex(pkg_id):
         draft["reporting_period"] = request.form.get("reporting_period", "").strip()
         draft["new_request_period"] = request.form.get("new_request_period", "").strip()
         draft["activities"] = _parse_face_activities_from_form(request.form, mode)
-        for a in draft["activities"]:
-            if a.get("lines"):
-                a["authorized"] = sum(L.get("budget_total", 0) for L in a["lines"])
-                if mode == "liquidation":
-                    a["actual"] = sum(L.get("actual_total", 0) for L in a["lines"])
+        _sync_face_from_annex(draft, mode)
         _save_package_data(pkg_id, draft)
         if request.form.get("nav") == "face":
+            flash("Annex 4 saved — FACE form amounts updated automatically.", "success")
             return redirect(url_for("face_form", pkg_id=pkg_id), code=303)
-        flash("Annex 4 saved.", "success")
+        flash("Annex 4 saved — FACE form and cover letter will use these totals.", "success")
         return redirect(url_for("face_annex", pkg_id=pkg_id), code=303)
 
     return render_template(
@@ -3434,11 +3538,12 @@ def face_form(pkg_id):
         flash("FACE form saved.", "success")
         return redirect(url_for("face_form", pkg_id=pkg_id), code=303)
 
+    _sync_face_from_annex(draft, mode)
     total_auth = sum(float(a.get("authorized") or 0) for a in draft.get("activities") or [])
     total_act = sum(float(a.get("actual") or 0) for a in draft.get("activities") or [])
     return render_template(
         "face_form.html", mode=mode, d=draft, is_liq=is_liq, pkg=pkg, editable=editable,
-        pkg_id=pkg_id, total_auth=total_auth, total_act=total_act,
+        pkg_id=pkg_id, total_auth=total_auth, total_act=total_act, auto_from_annex=True,
     )
 
 
@@ -3508,8 +3613,10 @@ def face_cover(pkg_id):
         flash("Cover letter saved.", "success")
         return redirect(url_for("face_cover", pkg_id=pkg_id), code=303)
 
+    _sync_face_from_annex(draft, mode)
     return render_template(
-        "face_cover.html", mode=mode, d=draft, is_liq=is_liq, pkg=pkg, editable=editable, pkg_id=pkg_id
+        "face_cover.html", mode=mode, d=draft, is_liq=is_liq, pkg=pkg, editable=editable, pkg_id=pkg_id,
+        auto_from_annex=True,
     )
 
 

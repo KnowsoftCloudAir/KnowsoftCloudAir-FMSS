@@ -11,6 +11,7 @@
 {% if not editable %}
 <div class="alert alert-secondary py-2">View only — package status: <strong>{{ pkg.status }}</strong></div>
 {% endif %}
+<div class="alert alert-info py-2 small"><i class="bi bi-info-circle"></i> Amounts below are filled automatically from Annex 4 totals. You may adjust if needed before saving.</div>
 <ul class="nav nav-pills mb-4">
     <li class="nav-item"><a class="nav-link" href="{{ url_for('face_annex', pkg_id=pkg_id) }}">1. Annex 4</a></li>
     <li class="nav-item"><span class="nav-link active">2. FACE form</span></li>

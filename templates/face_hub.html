@@ -23,6 +23,26 @@
     </div>
 </div>
 
+
+<div class="card border-info mb-4">
+    <div class="card-body d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <div>
+            <h5 class="mb-1"><i class="bi bi-file-earmark-pdf text-danger"></i> Sample final report</h5>
+            <p class="text-muted small mb-0">
+                Download a default sample PDF (cover letter + FACE form + Annex 4) to see how the finished package looks before you prepare a real one.
+            </p>
+        </div>
+        <div class="d-flex flex-wrap gap-2">
+            <a href="{{ url_for('face_sample_pdf', mode='liquidation') }}" class="btn btn-outline-success btn-sm">
+                <i class="bi bi-download"></i> Sample Liquidation PDF
+            </a>
+            <a href="{{ url_for('face_sample_pdf', mode='requisition') }}" class="btn btn-outline-primary btn-sm">
+                <i class="bi bi-download"></i> Sample Requisition PDF
+            </a>
+        </div>
+    </div>
+</div>
+
 {% if not is_authorizer %}
 <div class="row g-3 mb-4">
     <div class="col-md-6">
