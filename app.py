@@ -3246,32 +3246,33 @@ def _face_can_edit_package(pkg):
 
 
 def _face_sample_data(mode="liquidation"):
-    """Demo package data so users can preview the final report layout."""
+    """Demo package data so users can preview the final report layout (Knowsoft branding)."""
     data = _empty_face_data(mode)
     data.update({
-        "org_name": "Jigawa State Primary Healthcare Development Agency",
-        "org_address": "Block B, New State Secretariat Complex, Dutse, Jigawa State",
-        "org_email": "phc@jigawastate.gov.ng",
-        "ref_no": "PHCDA/PHC/IMM/VOL1/150",
-        "date": datetime.now().strftime("%Y-%m-%d"),
+        "org_name": "Knowsoft Technologies Ltd",
+        "org_address": "Knowsoft House, Innovation Hub, Abuja, Nigeria",
+        "org_email": "face@knowsoft.ng",
+        "ref_no": "KNS/FACE/HSS/VOL1/001",
+        "date": "2026-08-30",
         "addressee_title": "Chief of Field Office,",
-        "addressee_office": "UNICEF Kano Field Office,",
-        "addressee_city": "Kano.",
-        "signatory_name": "Dr. Sample Authorizing Officer",
-        "signatory_title": "Executive Secretary",
+        "addressee_office": "UNICEF Field Office,",
+        "addressee_city": "Abuja.",
+        "signatory_name": "Knowsoft Authorizing Officer",
+        "signatory_title": "Executive Director",
         "un_agency": "UNICEF",
         "country": "NIGERIA",
         "programme_code_title": "03 Programme Effectiveness — Outcome 1: Maternal Newborn and Child Health",
         "project_code_title": "Outcome 1.1 : HSS",
-        "responsible_officer": "Sample Programme Officer",
-        "implementing_partner": "Jigawa State Primary Healthcare Development Agency",
+        "responsible_officer": "Knowsoft Programme Officer",
+        "implementing_partner": "Knowsoft Technologies Ltd",
         "currency": "Naira (N)",
         "request_type": "dct",
         "reporting_period": "April to June 2024",
         "new_request_period": "July to September 2024",
-        "project_name": "Jigawa State Proposal for Quarter Activities (SAMPLE)",
-        "prog_officer": "Sample Programme Officer",
-        "preparer_name": "Sample Preparer",
+        "project_name": "Knowsoft Proposal for Quarter 1 Activities",
+        "prog_officer": "Knowsoft Programme Officer",
+        "preparer_name": "Knowsoft Preparer",
+        "org_logo_file": "knowsoft_logo.png",
     })
     # Sample line under activity A; other activities use summary amounts
     sample_lines = [
@@ -3744,164 +3745,163 @@ def face_pdf(pkg_id):
 
 
 def _build_face_package_pdf(d, mode):
-    """Build multi-page PDF: Cover (A), FACE (B), Annex 4 (C)."""
+    """Build multi-page PDF matching official FACE layout: Cover letter, FACE form, Annex 4.
+    Uses only entered data; permanent Knowsoft logo branding.
+    """
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+    from reportlab.lib.styles import ParagraphStyle
+
     buffer = BytesIO()
     doc = SimpleDocTemplate(
         buffer, pagesize=A4,
-        leftMargin=0.55 * inch, rightMargin=0.55 * inch,
-        topMargin=0.5 * inch, bottomMargin=0.5 * inch,
+        leftMargin=0.5 * inch, rightMargin=0.5 * inch,
+        topMargin=0.4 * inch, bottomMargin=0.45 * inch,
     )
     styles = getSampleStyleSheet()
+    # Custom styles closer to official form
+    styles.add(ParagraphStyle(name="CoverTitle", fontName="Helvetica-Bold", fontSize=11, alignment=TA_CENTER, spaceAfter=4))
+    styles.add(ParagraphStyle(name="CoverCenter", fontName="Helvetica", fontSize=9, alignment=TA_CENTER, spaceAfter=2))
+    styles.add(ParagraphStyle(name="CoverLeft", fontName="Helvetica", fontSize=9, alignment=TA_LEFT, spaceAfter=2, leading=12))
+    styles.add(ParagraphStyle(name="CoverBold", fontName="Helvetica-Bold", fontSize=9, alignment=TA_LEFT, spaceAfter=2))
+    styles.add(ParagraphStyle(name="FormHeader", fontName="Helvetica-Bold", fontSize=12, alignment=TA_CENTER, spaceAfter=6))
+    styles.add(ParagraphStyle(name="FormSmall", fontName="Helvetica", fontSize=8, leading=10, spaceAfter=1))
+    styles.add(ParagraphStyle(name="FormLabel", fontName="Helvetica-Bold", fontSize=8, leading=10))
+    styles.add(ParagraphStyle(name="AnnexHead", fontName="Helvetica-Bold", fontSize=10, alignment=TA_CENTER, spaceAfter=6))
+    styles.add(ParagraphStyle(name="Tiny", fontName="Helvetica", fontSize=7, leading=9))
+
     story = []
     is_liq = mode == "liquidation"
     activities = d.get("activities") or []
 
     def money(n):
         try:
-            return f"{float(n):,.2f}"
+            v = float(n)
+            if v == int(v):
+                return f"{int(v):,}"
+            return f"{v:,.2f}"
         except Exception:
-            return "0.00"
+            return "0"
 
     sig_path = os.path.join("static", d.get("signature_file") or "")
     stamp_path = os.path.join("static", d.get("stamp_file") or "")
 
-    # Organization logo on cover letter letterhead
-    logo_file = d.get("org_logo_file") or ""
-    logo_path = os.path.join("static", logo_file) if logo_file else ""
-    if logo_path and os.path.isfile(logo_path):
+    # ---------- Permanent Knowsoft logo (only) ----------
+    logo_candidates = [
+        os.path.join("static", d.get("org_logo_file") or ""),
+        os.path.join("static", "knowsoft_logo.png"),
+    ]
+    logo_path = next((p for p in logo_candidates if p and os.path.isfile(p)), None)
+
+    # ===================== PAGE 1: COVER LETTER =====================
+    if logo_path:
         try:
-            story.append(Image(logo_path, width=1.5 * inch, height=0.75 * inch))
-            story.append(Spacer(1, 6))
+            img = Image(logo_path, width=2.0 * inch, height=0.55 * inch)
+            img.hAlign = "CENTER"
+            story.append(img)
+            story.append(Spacer(1, 4))
         except Exception:
             pass
-    if d.get("org_name"):
-        story.append(Paragraph(f"<b>{d['org_name']}</b>", styles["Title"]))
+
+    org_name = d.get("org_name") or "Knowsoft"
+    story.append(Paragraph(f"<b>{org_name}</b>", styles["CoverTitle"]))
     if d.get("org_address"):
-        story.append(Paragraph(d["org_address"], styles["Normal"]))
+        story.append(Paragraph(d["org_address"], styles["CoverCenter"]))
     if d.get("org_email"):
-        story.append(Paragraph(f"Email: {d['org_email']}", styles["Normal"]))
-    story.append(Spacer(1, 10))
-    story.append(Paragraph(
-        f"<b>{d.get('ref_no') or ''}</b>" + "&nbsp;" * 40 + f"{d.get('date') or ''}",
-        styles["Normal"],
-    ))
-    story.append(Spacer(1, 12))
-    story.append(Paragraph(d.get("addressee_title") or "Chief of Field Office,", styles["Normal"]))
-    story.append(Paragraph(d.get("addressee_office") or "UNICEF Field Office,", styles["Normal"]))
-    story.append(Paragraph(d.get("addressee_city") or "", styles["Normal"]))
-    story.append(Spacer(1, 12))
-    story.append(Paragraph(f"<b>{d.get('subject') or ''}</b>", styles["Heading3"]))
+        story.append(Paragraph(f"Email: {d['org_email']}", styles["CoverCenter"]))
     story.append(Spacer(1, 8))
-    story.append(Paragraph(d.get("cover_body_intro") or "", styles["Normal"]))
+
+    # Gray header bar: Ref No | Date  (matches official sample)
+    ref_no = d.get("ref_no") or ""
+    date_str = d.get("date") or ""
+    header_tbl = Table(
+        [[Paragraph(f"<b>{ref_no}</b>", styles["FormSmall"]),
+          Paragraph(date_str, styles["FormSmall"])]],
+        colWidths=[350, 140],
+    )
+    header_tbl.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#d0d0d0")),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.black),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (1, 0), (1, 0), "RIGHT"),
+    ]))
+    story.append(header_tbl)
     story.append(Spacer(1, 10))
-    cover_data = [["SN", "ACTIVITY", "AMOUNT (N)"]]
+
+    # Addressee block
+    story.append(Paragraph(d.get("addressee_title") or "Chief of Field Office,", styles["CoverLeft"]))
+    story.append(Paragraph(d.get("addressee_office") or "UNICEF Field Office,", styles["CoverLeft"]))
+    story.append(Paragraph(d.get("addressee_city") or "", styles["CoverLeft"]))
+    story.append(Spacer(1, 8))
+
+    # Subject in bordered box
+    subject = d.get("subject") or ""
+    subj_tbl = Table(
+        [[Paragraph(f"<b>{subject}</b>", styles["FormSmall"])]],
+        colWidths=[490],
+    )
+    subj_tbl.setStyle(TableStyle([
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.black),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+    ]))
+    story.append(subj_tbl)
+    story.append(Spacer(1, 8))
+
+    # Body intro
+    story.append(Paragraph(d.get("cover_body_intro") or "", styles["CoverLeft"]))
+    story.append(Spacer(1, 8))
+
+    # Activity table (matches sample: SN | ACTIVITY | AMOUNT)
+    cover_data = [[
+        Paragraph("<b>SN</b>", styles["Tiny"]),
+        Paragraph("<b>ACTIVITY</b>", styles["Tiny"]),
+        Paragraph("<b>AMOUNT</b>", styles["Tiny"]),
+    ]]
     grand = 0.0
     for a in activities:
         amt = float(a.get("actual") or 0) if is_liq else float(a.get("authorized") or 0)
         grand += amt
-        cover_data.append([a.get("code") or "", a.get("name") or "", money(amt)])
-    cover_data.append(["", "GRAND TOTAL", money(grand)])
-    ct = Table(cover_data, colWidths=[50, 320, 100])
+        code = a.get("code") or ""
+        name = a.get("name") or ""
+        cover_data.append([
+            Paragraph(str(code), styles["Tiny"]),
+            Paragraph(str(name), styles["Tiny"]),
+            Paragraph(money(amt), styles["Tiny"]),
+        ])
+    # pad a few empty rows like the sample
+    for _ in range(max(0, 3 - len(activities))):
+        cover_data.append(["", "", ""])
+    cover_data.append([
+        "",
+        Paragraph("<b>GRAND TOTAL</b>", styles["Tiny"]),
+        Paragraph(f"<b>{money(grand)}</b>", styles["Tiny"]),
+    ])
+    ct = Table(cover_data, colWidths=[50, 320, 120])
     ct.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a365d")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 9),
-        ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
-        ("ALIGN", (2, 0), (2, -1), "RIGHT"),
-    ]))
-    story.append(ct)
-    story.append(Spacer(1, 20))
-    story.append(Paragraph("Best Regards,", styles["Normal"]))
-    story.append(Spacer(1, 8))
-    if os.path.isfile(sig_path):
-        try:
-            story.append(Image(sig_path, width=1.4 * inch, height=0.55 * inch))
-        except Exception:
-            pass
-    if os.path.isfile(stamp_path):
-        try:
-            story.append(Image(stamp_path, width=0.9 * inch, height=0.9 * inch))
-        except Exception:
-            pass
-    story.append(Paragraph(f"<b>{d.get('signatory_name') or ''}</b>", styles["Normal"]))
-    story.append(Paragraph(d.get("signatory_title") or "", styles["Normal"]))
-    story.append(Paragraph("<i>Authorized signatory (cover letter)</i>", styles["Normal"]))
-    story.append(PageBreak())
-
-    story.append(Paragraph("<b>Funding Authorization and Certificate of Expenditure</b>", styles["Heading1"]))
-    story.append(Paragraph(
-        f"UN Agency: <b>{d.get('un_agency') or 'UNICEF'}</b> &nbsp;&nbsp; Date: <b>{d.get('date') or ''}</b><br/>"
-        f"Country: <b>{d.get('country') or ''}</b> &nbsp;&nbsp; "
-        f"Type: <b>{'Direct Cash Transfer (DCT)' if d.get('request_type')=='dct' else d.get('request_type','').replace('_',' ').title()}</b><br/>"
-        f"Programme: {d.get('programme_code_title') or '—'}<br/>"
-        f"Project: {d.get('project_code_title') or '—'}<br/>"
-        f"Responsible Officer(s): {d.get('responsible_officer') or '—'}<br/>"
-        f"Implementing Partner: <b>{d.get('implementing_partner') or d.get('org_name') or '—'}</b><br/>"
-        f"Currency: {d.get('currency') or 'Naira (N)'}",
-        styles["Normal"],
-    ))
-    story.append(Spacer(1, 8))
-    if is_liq:
-        hdr = ["Activity", "Authorized (A)", "Actual (B)", "Accepted (C)", "Balance (D=A-C)"]
-        face_data = [hdr]
-        for a in activities:
-            auth = float(a.get("authorized") or 0)
-            act = float(a.get("actual") or 0)
-            face_data.append([
-                f"{a.get('code','')} {a.get('name','')}"[:42],
-                money(auth), money(act), "", money(auth),
-            ])
-        face_data.append([
-            "TOTAL",
-            money(sum(float(a.get("authorized") or 0) for a in activities)),
-            money(sum(float(a.get("actual") or 0) for a in activities)),
-            "",
-            money(sum(float(a.get("authorized") or 0) for a in activities)),
-        ])
-        widths = [200, 75, 75, 75, 75]
-    else:
-        hdr = ["Activity", "New Request (E)", "Authorized (F)", "Outstanding (G)"]
-        face_data = [hdr]
-        for a in activities:
-            auth = float(a.get("authorized") or 0)
-            face_data.append([f"{a.get('code','')} {a.get('name','')}"[:48], money(auth), "", money(auth)])
-        face_data.append([
-            "TOTAL",
-            money(sum(float(a.get("authorized") or 0) for a in activities)),
-            "",
-            money(sum(float(a.get("authorized") or 0) for a in activities)),
-        ])
-        widths = [250, 90, 90, 90]
-    ft = Table(face_data, colWidths=widths)
-    ft.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a365d")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.black),
+        ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.black),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e8e8e8")),
+        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#f0f0f0")),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, -1), 8),
-        ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
-        ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ALIGN", (2, 0), (2, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
     ]))
-    story.append(ft)
-    story.append(Spacer(1, 12))
-    story.append(Paragraph("<b>CERTIFICATION</b>", styles["Heading3"]))
-    if is_liq:
-        story.append(Paragraph(
-            "The actual expenditures for the period stated herein have been disbursed in accordance with the AWP "
-            "and request with itemized cost estimates. Supporting documents can be made available for five years.",
-            styles["Normal"],
-        ))
-    else:
-        story.append(Paragraph(
-            "The funding request shown above represents estimated expenditures as per AWP and itemized cost "
-            "estimates attached.",
-            styles["Normal"],
-        ))
+    story.append(ct)
+    story.append(Spacer(1, 16))
+    story.append(Paragraph("Best Regards", styles["CoverLeft"]))
     story.append(Spacer(1, 10))
-    story.append(Paragraph(f"Date Submitted: {d.get('date') or ''}", styles["Normal"]))
     if os.path.isfile(sig_path):
         try:
             story.append(Image(sig_path, width=1.3 * inch, height=0.5 * inch))
@@ -3912,87 +3912,349 @@ def _build_face_package_pdf(d, mode):
             story.append(Image(stamp_path, width=0.85 * inch, height=0.85 * inch))
         except Exception:
             pass
-    story.append(Paragraph(f"Name/Sign: <b>{d.get('signatory_name') or ''}</b>", styles["Normal"]))
-    story.append(Paragraph(f"Title / Official Stamp: {d.get('signatory_title') or ''}", styles["Normal"]))
+    story.append(Paragraph(f"<b>{d.get('signatory_name') or ''}</b>", styles["CoverBold"]))
+    story.append(Paragraph(d.get("signatory_title") or "", styles["CoverLeft"]))
     story.append(PageBreak())
 
-    title = "ANNEX 4 : ITEMIZED COST ESTIMATE / BUDGET"
-    title += " (LIQUIDATION)" if is_liq else " (PROPOSAL)"
-    story.append(Paragraph(f"<b>{title}</b>", styles["Heading2"]))
-    story.append(Paragraph(
-        f"Implementing Partner: <b>{d.get('implementing_partner') or d.get('org_name') or '—'}</b><br/>"
-        f"Project: {d.get('project_name') or '—'}<br/>"
-        f"Responsible Prog. Officer: {d.get('prog_officer') or '—'}<br/>"
-        f"Period: {d.get('reporting_period') or d.get('new_request_period') or '—'}",
-        styles["Normal"],
-    ))
-    story.append(Spacer(1, 8))
-    for a in activities:
-        story.append(Paragraph(f"<b>{a.get('code','')} {a.get('name','')}</b>", styles["Heading4"]))
-        lines = a.get("lines") or []
-        if not lines:
-            if is_liq:
-                story.append(Paragraph(
-                    f"Authorized: N{money(a.get('authorized'))} | Actual: N{money(a.get('actual'))}",
-                    styles["Normal"],
-                ))
-            else:
-                story.append(Paragraph(f"Budget total: N{money(a.get('authorized'))}", styles["Normal"]))
-            story.append(Spacer(1, 6))
-            continue
-        if is_liq:
-            ld = [["Description", "Qty", "Days", "Freq", "Rate", "Budget", "Act.Total", "Variance"]]
-            for L in lines:
-                ld.append([
-                    (L.get("description") or "")[:36],
-                    str(L.get("qty") or ""), str(L.get("days") or ""), str(L.get("freq") or ""),
-                    money(L.get("rate")), money(L.get("budget_total")),
-                    money(L.get("actual_total")), money(L.get("variance_total")),
-                ])
-            ld.append([
-                "Sub-total", "", "", "", "",
-                money(sum(L.get("budget_total", 0) for L in lines)),
-                money(sum(L.get("actual_total", 0) for L in lines)),
-                money(sum(L.get("variance_total", 0) for L in lines)),
-            ])
-            widths = [130, 35, 35, 35, 50, 55, 55, 55]
-        else:
-            ld = [["Description", "Qty", "Days", "Freq", "Rate", "Total"]]
-            for L in lines:
-                ld.append([
-                    (L.get("description") or "")[:40],
-                    str(L.get("qty") or ""), str(L.get("days") or ""), str(L.get("freq") or ""),
-                    money(L.get("rate")), money(L.get("budget_total")),
-                ])
-            ld.append(["Sub-total", "", "", "", "", money(sum(L.get("budget_total", 0) for L in lines))])
-            widths = [180, 40, 40, 40, 60, 70]
-        lt = Table(ld, colWidths=widths)
-        lt.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2b6cb0")),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, -1), 7),
-            ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
-            ("ALIGN", (1, 1), (-1, -1), "RIGHT"),
-        ]))
-        story.append(lt)
-        story.append(Spacer(1, 10))
+    # ===================== PAGE 2: FACE FORM =====================
+    if logo_path:
+        try:
+            img = Image(logo_path, width=1.6 * inch, height=0.45 * inch)
+            img.hAlign = "CENTER"
+            story.append(img)
+            story.append(Spacer(1, 3))
+        except Exception:
+            pass
 
-    story.append(Spacer(1, 16))
-    story.append(Paragraph("Implementing Partner's Designated Official (authorized):", styles["Normal"]))
+    story.append(Paragraph("Funding Authorization and Certificate of Expenditure", styles["FormHeader"]))
+
+    # Top meta table (Country / Agency / Date / Type)
+    req_type = "Direct Cash Transfer (DCT)" if d.get("request_type") == "dct" else (
+        d.get("request_type", "").replace("_", " ").title() or "—"
+    )
+    meta = [
+        [Paragraph(f"<b>Country:</b> {d.get('country') or 'NIGERIA'}", styles["FormSmall"]),
+         Paragraph(f"<b>UN Agency:</b> {d.get('un_agency') or 'UNICEF'}", styles["FormSmall"]),
+         Paragraph(f"<b>Date:</b> {date_str}", styles["FormSmall"])],
+        [Paragraph(f"<b>Programme Code &amp; Title:</b> {d.get('programme_code_title') or '—'}", styles["FormSmall"]),
+         Paragraph(f"<b>Type of Request:</b> {req_type}", styles["FormSmall"]), ""],
+        [Paragraph(f"<b>Project Code &amp; Title:</b> {d.get('project_code_title') or '—'}", styles["FormSmall"]),
+         Paragraph(f"<b>Currency:</b> {d.get('currency') or 'Naira (N)'}", styles["FormSmall"]), ""],
+        [Paragraph(f"<b>Responsible Officer(s):</b> {d.get('responsible_officer') or '—'}", styles["FormSmall"]),
+         Paragraph(f"<b>Implementing Partner:</b> {d.get('implementing_partner') or org_name}", styles["FormSmall"]), ""],
+    ]
+    mt = Table(meta, colWidths=[220, 180, 90])
+    mt.setStyle(TableStyle([
+        ("BOX", (0, 0), (-1, -1), 0.6, colors.black),
+        ("INNERGRID", (0, 0), (-1, -1), 0.3, colors.grey),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f5f5f5")),
+    ]))
+    story.append(mt)
+    story.append(Spacer(1, 8))
+
+    # REPORTING / REQUESTS table
+    if is_liq:
+        hdr = [
+            Paragraph("<b>Activity Description from AWP</b>", styles["Tiny"]),
+            Paragraph("<b>Authorized Amount<br/>A</b>", styles["Tiny"]),
+            Paragraph("<b>Actual Project<br/>Expenditure B</b>", styles["Tiny"]),
+            Paragraph("<b>Expenditures<br/>accepted by Agency C</b>", styles["Tiny"]),
+            Paragraph("<b>Balance<br/>D = A − C</b>", styles["Tiny"]),
+        ]
+        face_data = [hdr]
+        tot_a = tot_b = 0.0
+        for a in activities:
+            auth = float(a.get("authorized") or 0)
+            act = float(a.get("actual") or 0)
+            tot_a += auth
+            tot_b += act
+            face_data.append([
+                Paragraph(f"{a.get('code','')} {a.get('name','')}"[:48], styles["Tiny"]),
+                Paragraph(money(auth), styles["Tiny"]),
+                Paragraph(money(act), styles["Tiny"]),
+                Paragraph("", styles["Tiny"]),
+                Paragraph(money(auth), styles["Tiny"]),
+            ])
+        face_data.append([
+            Paragraph("<b>TOTAL</b>", styles["Tiny"]),
+            Paragraph(f"<b>{money(tot_a)}</b>", styles["Tiny"]),
+            Paragraph(f"<b>{money(tot_b)}</b>", styles["Tiny"]),
+            Paragraph("", styles["Tiny"]),
+            Paragraph(f"<b>{money(tot_a)}</b>", styles["Tiny"]),
+        ])
+        widths = [175, 80, 80, 80, 75]
+    else:
+        hdr = [
+            Paragraph("<b>Activity Description from AWP</b>", styles["Tiny"]),
+            Paragraph("<b>New Request Period &amp; Amount E</b>", styles["Tiny"]),
+            Paragraph("<b>Authorized Amount F</b>", styles["Tiny"]),
+            Paragraph("<b>Outstanding Authorized Amount G = D + F</b>", styles["Tiny"]),
+        ]
+        face_data = [hdr]
+        tot = 0.0
+        for a in activities:
+            auth = float(a.get("authorized") or 0)
+            tot += auth
+            face_data.append([
+                Paragraph(f"{a.get('code','')} {a.get('name','')}"[:50], styles["Tiny"]),
+                Paragraph(money(auth), styles["Tiny"]),
+                Paragraph("", styles["Tiny"]),
+                Paragraph(money(auth), styles["Tiny"]),
+            ])
+        face_data.append([
+            Paragraph("<b>TOTAL</b>", styles["Tiny"]),
+            Paragraph(f"<b>{money(tot)}</b>", styles["Tiny"]),
+            Paragraph("", styles["Tiny"]),
+            Paragraph(f"<b>{money(tot)}</b>", styles["Tiny"]),
+        ])
+        widths = [220, 100, 90, 100]
+
+    ft = Table(face_data, colWidths=widths)
+    ft.setStyle(TableStyle([
+        ("BOX", (0, 0), (-1, -1), 0.7, colors.black),
+        ("INNERGRID", (0, 0), (-1, -1), 0.35, colors.black),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e0e0e0")),
+        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#f0f0f0")),
+        ("FONTSIZE", (0, 0), (-1, -1), 7),
+        ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    story.append(ft)
+    story.append(Spacer(1, 10))
+
+    # CERTIFICATION block
+    story.append(Paragraph("<b>CERTIFICATION</b>", styles["FormLabel"]))
+    if is_liq:
+        cert_text = (
+            "The undersigned authorized officer of the above-mentioned implementing institution hereby certifies that: "
+            "The actual expenditures for the period stated herein have been disbursed in accordance with the AWP "
+            "and request with itemized cost estimates. The detailed accounting documents for these expenditures "
+            "can be made available for examination, when required, for the period of five years from the date of "
+            "the provision of funds."
+        )
+    else:
+        cert_text = (
+            "The funding request shown above represents estimated expenditures as per AWP and itemized cost "
+            "estimates attached."
+        )
+    story.append(Paragraph(cert_text, styles["FormSmall"]))
+    story.append(Spacer(1, 8))
+
+    cert_sig = [
+        [Paragraph(f"<b>Date Submitted:</b> {date_str}", styles["FormSmall"]),
+         Paragraph(f"<b>Name/Sign:</b> {d.get('signatory_name') or ''}", styles["FormSmall"])],
+        [Paragraph(f"<b>Title/Official Stamp:</b> {d.get('signatory_title') or ''}", styles["FormSmall"]), ""],
+    ]
+    cst = Table(cert_sig, colWidths=[250, 240])
+    cst.setStyle(TableStyle([
+        ("BOX", (0, 0), (-1, -1), 0.5, colors.black),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    story.append(cst)
     if os.path.isfile(sig_path):
         try:
-            story.append(Image(sig_path, width=1.3 * inch, height=0.5 * inch))
+            story.append(Spacer(1, 4))
+            story.append(Image(sig_path, width=1.2 * inch, height=0.45 * inch))
         except Exception:
             pass
     if os.path.isfile(stamp_path):
         try:
-            story.append(Image(stamp_path, width=0.85 * inch, height=0.85 * inch))
+            story.append(Image(stamp_path, width=0.75 * inch, height=0.75 * inch))
         except Exception:
             pass
-    story.append(Paragraph(f"<b>{d.get('signatory_name') or ''}</b> — {d.get('signatory_title') or ''}", styles["Normal"]))
-    story.append(Paragraph(f"Date: {d.get('date') or ''}", styles["Normal"]))
+    story.append(PageBreak())
+
+    # ===================== PAGE 3: ANNEX 4 =====================
+    if logo_path:
+        try:
+            img = Image(logo_path, width=1.5 * inch, height=0.42 * inch)
+            img.hAlign = "CENTER"
+            story.append(img)
+            story.append(Spacer(1, 3))
+        except Exception:
+            pass
+
+    annex_title = "ANNEX 4 : ITEMIZED COST ESTIMATE / BUDGET FOR ACTIVITIES"
+    if d.get("reporting_period"):
+        annex_title += f" ({d.get('reporting_period')})"
+    story.append(Paragraph(f"<b>{annex_title}</b>", styles["AnnexHead"]))
+
+    story.append(Paragraph(
+        f"<b>NAME OF IMPLEMENTING PARTNER:</b> {d.get('implementing_partner') or org_name}<br/>"
+        f"<b>NAME OF PROJECT:</b> {d.get('project_name') or '—'}<br/>"
+        f"<b>Responsible Prog. Officer:</b> {d.get('prog_officer') or d.get('responsible_officer') or '—'}",
+        styles["FormSmall"],
+    ))
+    story.append(Spacer(1, 6))
+
+    for a in activities:
+        story.append(Paragraph(
+            f"<b>{a.get('code', '')} {a.get('name', '')}</b>",
+            styles["FormLabel"],
+        ))
+        lines = a.get("lines") or []
+        if not lines:
+            # Summary-only row when no line items entered
+            if is_liq:
+                summary = [[
+                    Paragraph("Summary (no line items)", styles["Tiny"]),
+                    Paragraph(money(a.get("authorized")), styles["Tiny"]),
+                    Paragraph(money(a.get("actual")), styles["Tiny"]),
+                    Paragraph(money(float(a.get("authorized") or 0) - float(a.get("actual") or 0)), styles["Tiny"]),
+                ]]
+                st = Table(
+                    [[Paragraph("<b>Description</b>", styles["Tiny"]),
+                      Paragraph("<b>BUDGET</b>", styles["Tiny"]),
+                      Paragraph("<b>ACTUAL</b>", styles["Tiny"]),
+                      Paragraph("<b>VARIANCE</b>", styles["Tiny"])]] + summary,
+                    colWidths=[220, 90, 90, 90],
+                )
+            else:
+                summary = [[
+                    Paragraph("Summary (no line items)", styles["Tiny"]),
+                    Paragraph(money(a.get("authorized")), styles["Tiny"]),
+                ]]
+                st = Table(
+                    [[Paragraph("<b>Description</b>", styles["Tiny"]),
+                      Paragraph("<b>BUDGET TOTAL</b>", styles["Tiny"])]] + summary,
+                    colWidths=[350, 140],
+                )
+            st.setStyle(TableStyle([
+                ("BOX", (0, 0), (-1, -1), 0.5, colors.black),
+                ("INNERGRID", (0, 0), (-1, -1), 0.3, colors.grey),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e8e8e8")),
+                ("FONTSIZE", (0, 0), (-1, -1), 7),
+                ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 3),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ]))
+            story.append(st)
+            story.append(Spacer(1, 6))
+            continue
+
+        if is_liq:
+            ld = [[
+                Paragraph("<b>Description</b>", styles["Tiny"]),
+                Paragraph("<b>Qty</b>", styles["Tiny"]),
+                Paragraph("<b>Days</b>", styles["Tiny"]),
+                Paragraph("<b>Freq</b>", styles["Tiny"]),
+                Paragraph("<b>Rate</b>", styles["Tiny"]),
+                Paragraph("<b>Budget</b>", styles["Tiny"]),
+                Paragraph("<b>Actual</b>", styles["Tiny"]),
+                Paragraph("<b>Variance</b>", styles["Tiny"]),
+            ]]
+            for L in lines:
+                ld.append([
+                    Paragraph((L.get("description") or "")[:34], styles["Tiny"]),
+                    Paragraph(str(L.get("qty") or ""), styles["Tiny"]),
+                    Paragraph(str(L.get("days") or ""), styles["Tiny"]),
+                    Paragraph(str(L.get("freq") or ""), styles["Tiny"]),
+                    Paragraph(money(L.get("rate")), styles["Tiny"]),
+                    Paragraph(money(L.get("budget_total")), styles["Tiny"]),
+                    Paragraph(money(L.get("actual_total")), styles["Tiny"]),
+                    Paragraph(money(L.get("variance_total")), styles["Tiny"]),
+                ])
+            b_tot = sum(float(L.get("budget_total") or 0) for L in lines)
+            a_tot = sum(float(L.get("actual_total") or 0) for L in lines)
+            v_tot = sum(float(L.get("variance_total") or 0) for L in lines)
+            ld.append([
+                Paragraph("<b>Sub Total</b>", styles["Tiny"]),
+                "", "", "", "",
+                Paragraph(f"<b>{money(b_tot)}</b>", styles["Tiny"]),
+                Paragraph(f"<b>{money(a_tot)}</b>", styles["Tiny"]),
+                Paragraph(f"<b>{money(v_tot)}</b>", styles["Tiny"]),
+            ])
+            widths = [120, 32, 32, 32, 48, 55, 55, 55]
+        else:
+            ld = [[
+                Paragraph("<b>Description</b>", styles["Tiny"]),
+                Paragraph("<b>Qty</b>", styles["Tiny"]),
+                Paragraph("<b>Days</b>", styles["Tiny"]),
+                Paragraph("<b>Freq</b>", styles["Tiny"]),
+                Paragraph("<b>Rate</b>", styles["Tiny"]),
+                Paragraph("<b>Total</b>", styles["Tiny"]),
+            ]]
+            for L in lines:
+                ld.append([
+                    Paragraph((L.get("description") or "")[:40], styles["Tiny"]),
+                    Paragraph(str(L.get("qty") or ""), styles["Tiny"]),
+                    Paragraph(str(L.get("days") or ""), styles["Tiny"]),
+                    Paragraph(str(L.get("freq") or ""), styles["Tiny"]),
+                    Paragraph(money(L.get("rate")), styles["Tiny"]),
+                    Paragraph(money(L.get("budget_total")), styles["Tiny"]),
+                ])
+            b_tot = sum(float(L.get("budget_total") or 0) for L in lines)
+            ld.append([
+                Paragraph("<b>Sub Total</b>", styles["Tiny"]),
+                "", "", "", "",
+                Paragraph(f"<b>{money(b_tot)}</b>", styles["Tiny"]),
+            ])
+            widths = [180, 40, 40, 40, 60, 80]
+
+        lt = Table(ld, colWidths=widths)
+        lt.setStyle(TableStyle([
+            ("BOX", (0, 0), (-1, -1), 0.5, colors.black),
+            ("INNERGRID", (0, 0), (-1, -1), 0.3, colors.grey),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e0e0e0")),
+            ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#f5f5f5")),
+            ("FONTSIZE", (0, 0), (-1, -1), 7),
+            ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 2),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ]))
+        story.append(lt)
+        story.append(Spacer(1, 8))
+
+    # Signature block at end of Annex
+    story.append(Spacer(1, 12))
+    sig_block = [
+        [Paragraph("<b>Implementing Partner's Designated Official:</b>", styles["FormSmall"]),
+         Paragraph("<b>For Agency Use Only</b>", styles["FormSmall"])],
+        [Paragraph(f"Name/Sign: {d.get('signatory_name') or ''}", styles["FormSmall"]),
+         Paragraph("Certifying Officer:", styles["FormSmall"])],
+        [Paragraph(f"Title: {d.get('signatory_title') or ''}", styles["FormSmall"]),
+         Paragraph("Approving Officer:", styles["FormSmall"])],
+        [Paragraph(f"Date: {date_str}", styles["FormSmall"]),
+         Paragraph("Date:", styles["FormSmall"])],
+    ]
+    sbt = Table(sig_block, colWidths=[250, 240])
+    sbt.setStyle(TableStyle([
+        ("BOX", (0, 0), (-1, -1), 0.6, colors.black),
+        ("INNERGRID", (0, 0), (-1, -1), 0.3, colors.grey),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e8e8e8")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    story.append(sbt)
+    if os.path.isfile(sig_path):
+        try:
+            story.append(Spacer(1, 4))
+            story.append(Image(sig_path, width=1.2 * inch, height=0.45 * inch))
+        except Exception:
+            pass
+    if os.path.isfile(stamp_path):
+        try:
+            story.append(Image(stamp_path, width=0.75 * inch, height=0.75 * inch))
+        except Exception:
+            pass
+
     doc.build(story)
     buffer.seek(0)
     return buffer
